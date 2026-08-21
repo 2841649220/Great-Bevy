@@ -1,0 +1,735 @@
+/*
+ *  Copyright 2026 Diligent Graphics LLC
+ *
+ *  Licensed under the Apache License, Version 2.0 (the "License");
+ *  you may not use this file except in compliance with the License.
+ *  You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ *  Unless required by applicable law or agreed to in writing, software
+ *  distributed under the License is distributed on an "AS IS" BASIS,
+ *  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ *  See the License for the specific language governing permissions and
+ *  limitations under the License.
+ *
+ *  In no event and under no legal theory, whether in tort (including negligence),
+ *  contract, or otherwise, unless required by applicable law (such as deliberate
+ *  and grossly negligent acts) or agreed to in writing, shall any Contributor be
+ *  liable for any damages, including any direct, indirect, special, incidental,
+ *  or consequential damages of any character arising as a result of this License or
+ *  out of the use or inability to use the software (including but not limited to damages
+ *  for loss of goodwill, work stoppage, computer failure or malfunction, or any and
+ *  all other commercial damages or losses), even if such Contributor has been advised
+ *  of the possibility of such damages.
+ */
+
+#pragma once
+
+#include "../../GraphicsEngine/interface/RenderDevice.h"
+#include "../../GraphicsEngine/interface/DeviceContext.h"
+
+DILIGENT_BEGIN_NAMESPACE(Diligent)
+
+#include "../../../Primitives/interface/DefineRefMacro.h"
+
+/// Create info structure for GPU upload manager
+struct GPUUploadManagerCreateInfo
+{
+    /// Pointer to the render device. Must not be null.
+    IRenderDevice* pDevice DEFAULT_INITIALIZER(nullptr);
+
+    /// Pointer to the device context.
+    /// If null, initial pages will be created, but they will not become available until the first call to
+    /// RenderThreadUpdate() with a valid device context pointer.
+    IDeviceContext* pContext DEFAULT_INITIALIZER(nullptr);
+
+    /// Size of the upload page.
+    Uint32 PageSize DEFAULT_INITIALIZER(4 * 1024 * 1024);
+
+    /// Size of the large upload page.
+    Uint32 LargePageSize DEFAULT_INITIALIZER(16 * 1024 * 1024);
+
+    /// Initial number of upload pages. If the manager runs out of pages to write to,
+    /// it will create new ones as needed. This parameter controls how many pages are created at startup.
+    Uint32 InitialPageCount DEFAULT_INITIALIZER(4);
+
+    /// Initial number of large upload pages.
+    Uint32 InitialLargePageCount DEFAULT_INITIALIZER(1);
+
+    /// Maximum number of pages that the manager should maintain. If 0, there is no limit to the number
+    /// of pages that can be created.
+    ///
+    /// Note the manager may temporarily exceed this limit in certain scenarios (for example, if large
+    /// update is scheduled while the maximum is already reached), but it will reduce the number of
+    /// pages to the maximum as soon as possible.
+    Uint32 MaxPageCount DEFAULT_INITIALIZER(64);
+
+    /// Maximum number of large pages that the manager should maintain. If 0, there is no limit to the number
+    /// of large pages that can be created.
+    Uint32 MaxLargePageCount DEFAULT_INITIALIZER(16);
+};
+typedef struct GPUUploadManagerCreateInfo GPUUploadManagerCreateInfo;
+
+
+/// Callback function type for writing data to a staging buffer.
+/// This callback is invoked by ScheduleBufferUpdate() when the manager needs to write data to a staging buffer page.
+/// The callback is expected to write the data to the provided destination pointer.
+/// \param [in] pDstData   - Pointer to the staging buffer memory where the data should be written.
+/// \param [in] NumBytes   - Number of bytes to write. This is the same number of bytes specified in ScheduleBufferUpdateInfo::NumBytes.
+/// \param [in] pUserData  - User-provided pointer passed to ScheduleBufferUpdate().
+///
+/// \warning Reentrancy / thread-safety:
+///          The callback is executed from inside IGPUUploadManager::ScheduleBufferUpdate().
+///          The callback MUST NOT call back into the same IGPUUploadManager instance.
+///          The callback MUST NOT throw exceptions. It must handle any errors internally.
+typedef void (*WriteStagingBufferDataCallbackType)(void* pDstData, Uint32 NumBytes, void* pUserData);
+
+
+/// Callback function type for GPU upload enqueued callback.
+///
+/// This callback is invoked on the render thread when the copy command for the update
+/// has been enqueued into the device context command stream (i.e. the copy is *scheduled*,
+/// but may not have executed on the GPU yet).
+///
+/// If the copy operation has not been scheduled by the time the manager is stopped or destroyed,
+/// or if scheduling is otherwise abandoned, the callback will be invoked
+/// with a null buffer pointer, allowing the application to clean up any resources
+/// associated with the copy operation.
+///
+/// \warning Reentrancy / thread-safety:
+///          The callback is normally executed from inside IGPUUploadManager::RenderThreadUpdate().
+///          If scheduling is abandoned, it may be executed with a null buffer pointer
+///          from inside ScheduleBufferUpdate() or the manager stop/destruction path.
+///          The callback MUST NOT call back into the same IGPUUploadManager instance
+///          (e.g. ScheduleBufferUpdate(), RenderThreadUpdate(), GetStats()), and MUST NOT
+///          perform actions that may synchronously trigger RenderThreadUpdate() or otherwise
+///          re-enter the manager, as this may lead to deadlocks, unbounded recursion, or
+///          inconsistent internal state.
+///          The callback MUST NOT throw exceptions. It must handle any errors internally.
+///
+///          If follow-up work is required, the callback should only enqueue work to be
+///          processed later (e.g. push a task into a user-owned queue) and return promptly.
+///
+/// \param [in] pDstBuffer  - Destination buffer passed to ScheduleBufferUpdate().
+/// \param [in] DstOffset   - Destination offset passed to ScheduleBufferUpdate().
+/// \param [in] NumBytes    - Number of bytes passed to ScheduleBufferUpdate().
+/// \param [in] pUserData   - User-provided pointer passed to ScheduleBufferUpdate().
+typedef void (*GPUBufferUploadEnqueuedCallbackType)(IBuffer* pDstBuffer,
+                                                    Uint32   DstOffset,
+                                                    Uint32   NumBytes,
+                                                    void*    pUserData);
+
+
+/// Callback function type for copying buffer data.
+/// This callback is invoked on the render thread when the manager needs to perform the copy operation for a buffer update.
+/// The callback is expected to perform the copy operation itself, using the provided parameters, and schedule it for execution on the GPU.
+///
+/// \param [in] pContext   - Device context to use for scheduling the copy operation.
+/// \param [in] pSrcBuffer - Source buffer containing the data to copy.
+/// \param [in] SrcOffset  - Offset in the source buffer where the data to copy starts.
+/// \param [in] NumBytes   - Number of bytes to copy.
+/// \param [in] pUserData  - User-provided pointer passed to ScheduleBufferUpdate().
+///
+/// If the copy operation was not scheduled by the time the manager is stopped or destroyed,
+/// or if scheduling is otherwise abandoned, the callback will be called
+/// with a null device context pointer so that the application can clean up any resources
+/// associated with the copy operation.
+///
+/// \warning Reentrancy / thread-safety:
+///          The callback is normally executed from inside IGPUUploadManager::RenderThreadUpdate().
+///          If scheduling is abandoned, it may be executed with a null context pointer
+///          from inside ScheduleBufferUpdate() or the manager stop/destruction path.
+///          The callback MUST NOT call back into the same IGPUUploadManager instance
+///          (e.g. ScheduleBufferUpdate(), RenderThreadUpdate(), GetStats()), and MUST NOT
+///          perform actions that may synchronously trigger RenderThreadUpdate() or otherwise
+///          re-enter the manager, as this may lead to deadlocks, unbounded recursion, or
+///          inconsistent internal state.
+///          The callback MUST NOT throw exceptions. It must handle any errors internally.
+///
+///          If follow-up work is required, the callback should only enqueue work to be
+///          processed later (e.g. push a task into a user-owned queue) and return promptly.
+typedef void (*CopyStagingBufferCallbackType)(IDeviceContext* pContext,
+                                              IBuffer*        pSrcBuffer,
+                                              Uint32          SrcOffset,
+                                              Uint32          NumBytes,
+                                              void*           pUserData);
+
+
+/// Structure describing a buffer update operation to be scheduled by IGPUUploadManager::ScheduleBufferUpdate().
+struct ScheduleBufferUpdateInfo
+{
+    /// If calling ScheduleBufferUpdate() from the render thread, a pointer to the device context.
+    /// If no manager context has been set yet, this context becomes the manager context.
+    /// Otherwise, it must be the same as the manager context.
+    /// If calling ScheduleBufferUpdate() from a worker thread, this parameter must be null.
+    IDeviceContext* pContext DEFAULT_INITIALIZER(nullptr);
+
+    /// Pointer to the destination buffer to update.
+    /// If CopyBuffer callback is provided, this parameter will be ignored
+    /// (though the manager will still keep a reference to the buffer until the copy operation is scheduled),
+    /// and the callback must perform the copy operation itself.
+    /// Otherwise, this buffer will be used as the destination for the copy operation
+    IBuffer* pDstBuffer DEFAULT_INITIALIZER(nullptr);
+
+    /// State transition mode for the destination buffer. This parameter is ignored if CopyBuffer callback is provided,
+    /// and the callback is expected to perform any necessary state transitions itself.
+    RESOURCE_STATE_TRANSITION_MODE DstBufferTransitionMode DEFAULT_INITIALIZER(RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+
+    /// Offset in the destination buffer where the update will be applied.
+    /// If CopyBuffer callback is provided, this parameter will be ignored, and the callback must
+    /// perform the copy operation itself.
+    /// Otherwise, this offset will be used as the destination offset for the copy operation.
+    Uint32 DstOffset DEFAULT_INITIALIZER(0);
+
+    /// Number of bytes to copy from the source data to the destination buffer.
+    Uint32 NumBytes DEFAULT_INITIALIZER(0);
+
+    /// Pointer to the source data to copy to the destination buffer.
+    /// The manager makes an internal copy of the source data, so the memory pointed to by this
+    /// parameter can be safely released or reused after the method returns.
+    /// If WriteDataCallback callback is provided, this parameter will be ignored, and the callback must
+    /// write the source data to the staging buffer when requested by the manager.
+    const void* pSrcData DEFAULT_INITIALIZER(nullptr);
+
+    /// Optional callback to write data to a staging buffer. If provided, the pSrcData parameter is ignored,
+    /// and the manager will call the callback with a pointer to the staging buffer memory when it needs to
+    /// write data to a staging buffer page.
+    /// The callback will be called from ScheduleBufferUpdate().
+    WriteStagingBufferDataCallbackType WriteDataCallback DEFAULT_INITIALIZER(nullptr);
+
+    /// Optional pointer to user data that will be passed to the WriteDataCallback.
+    void* pWriteDataCallbackUserData DEFAULT_INITIALIZER(nullptr);
+
+    /// Optional callback to perform the copy operation. If this parameter is null, the manager will perform the copy
+    /// from the source data to the destination buffer using its internal staging buffer and copy command.
+    /// If the callback is provided, it must perform the copy operation itself. The manager will pass the
+    /// necessary parameters to the callback.
+    CopyStagingBufferCallbackType CopyBuffer DEFAULT_INITIALIZER(nullptr);
+
+    /// Optional pointer to user data that will be passed to the CopyBuffer callback.
+    void* pCopyBufferData DEFAULT_INITIALIZER(nullptr);
+
+    /// Optional callback to be called when the GPU copy operation is scheduled for execution.
+    /// If CopyBuffer is provided, this callback is ignored and will not be called, including
+    /// when scheduling is abandoned. CopyBuffer is expected to perform any necessary follow-up
+    /// and cleanup work. Providing both callbacks will produce a warning.
+    /// If CopyBuffer is not provided and scheduling is abandoned, the callback may be called
+    /// with a null destination buffer so the application can release callback-specific user data.
+    GPUBufferUploadEnqueuedCallbackType UploadEnqueued DEFAULT_INITIALIZER(nullptr);
+
+    /// Optional pointer to user data that will be passed to the UploadEnqueued callback.
+    void* pUploadEnqueuedData DEFAULT_INITIALIZER(nullptr);
+
+#if DILIGENT_CPP_INTERFACE
+    ScheduleBufferUpdateInfo() noexcept = default;
+
+    ScheduleBufferUpdateInfo(IDeviceContext*                     _pCtx,
+                             IBuffer*                            _pDstBuf,
+                             Uint32                              _DstOffs,
+                             Uint32                              _NumBytes,
+                             const void*                         _pSrcData,
+                             GPUBufferUploadEnqueuedCallbackType _UploadEnqueued      = nullptr,
+                             void*                               _pUploadEnqueuedData = nullptr) noexcept :
+        pContext{_pCtx},
+        pDstBuffer{_pDstBuf},
+        DstOffset{_DstOffs},
+        NumBytes{_NumBytes},
+        pSrcData{_pSrcData},
+        UploadEnqueued{_UploadEnqueued},
+        pUploadEnqueuedData{_pUploadEnqueuedData}
+    {}
+
+    ScheduleBufferUpdateInfo(IBuffer*                            _pDstBuf,
+                             Uint32                              _DstOffs,
+                             Uint32                              _NumBytes,
+                             const void*                         _pSrcData,
+                             GPUBufferUploadEnqueuedCallbackType _UploadEnqueued      = nullptr,
+                             void*                               _pUploadEnqueuedData = nullptr) noexcept :
+        ScheduleBufferUpdateInfo{nullptr, _pDstBuf, _DstOffs, _NumBytes, _pSrcData, _UploadEnqueued, _pUploadEnqueuedData}
+    {}
+
+    ScheduleBufferUpdateInfo(IDeviceContext*               _pCtx,
+                             Uint32                        _NumBytes,
+                             const void*                   _pSrcData,
+                             CopyStagingBufferCallbackType _CopyBuffer,
+                             void*                         _pCopyBufferData = nullptr) noexcept :
+        pContext{_pCtx},
+        NumBytes{_NumBytes},
+        pSrcData{_pSrcData},
+        CopyBuffer{_CopyBuffer},
+        pCopyBufferData{_pCopyBufferData}
+    {}
+
+    ScheduleBufferUpdateInfo(Uint32                        _NumBytes,
+                             const void*                   _pSrcData,
+                             CopyStagingBufferCallbackType _CopyBuffer,
+                             void*                         _pCopyBufferData = nullptr) noexcept :
+        ScheduleBufferUpdateInfo{nullptr, _NumBytes, _pSrcData, _CopyBuffer, _pCopyBufferData}
+    {}
+#endif
+};
+typedef struct ScheduleBufferUpdateInfo ScheduleBufferUpdateInfo;
+
+
+
+/// Callback function type for writing data to a staging texture.
+/// This callback is invoked by ScheduleTextureUpdate() when the manager needs to write data to a staging texture page.
+/// The callback is expected to write the data to the provided destination pointer.
+/// \param [in] pDstData    - Pointer to the staging texture memory where the data should be written.
+/// \param [in] Stride      - Stride (pitch) of the staging texture memory.
+/// \param [in] DepthStride - Depth stride of the staging texture memory.
+/// \param [in] DstBox      - Destination box in the texture where the update will be applied.
+/// \param [in] pUserData   - User-provided pointer passed to ScheduleTextureUpdate().
+///
+/// \warning Reentrancy / thread-safety:
+///          The callback is executed from inside IGPUUploadManager::ScheduleTextureUpdate().
+///          The callback MUST NOT call back into the same IGPUUploadManager instance.
+///          The callback MUST NOT throw exceptions. It must handle any errors internally.
+typedef void (*WriteStagingTextureDataCallbackType)(void*         pDstData,
+                                                    Uint32        Stride,
+                                                    Uint32        DepthStride,
+                                                    const Box REF DstBox,
+                                                    void*         pUserData);
+
+
+/// Callback function type for GPU upload enqueued callback.
+///
+/// This callback is invoked on the render thread when the copy command for the update
+/// has been enqueued into the device context command stream (i.e. the copy is *scheduled*,
+/// but may not have executed on the GPU yet).
+///
+/// If the copy operation has not been scheduled by the time the manager is stopped or destroyed,
+/// or if scheduling is otherwise abandoned, the callback will be invoked
+/// with a null texture pointer, allowing the application to clean up any resources
+/// associated with the copy operation.
+///
+/// \warning Reentrancy / thread-safety:
+///          The callback is normally executed from inside IGPUUploadManager::RenderThreadUpdate().
+///          If scheduling is abandoned, it may be executed with a null texture pointer
+///          from inside ScheduleTextureUpdate() or the manager stop/destruction path.
+///          The callback MUST NOT call back into the same IGPUUploadManager instance
+///          (e.g. ScheduleTextureUpdate(), RenderThreadUpdate(), GetStats()), and MUST NOT
+///          perform actions that may synchronously trigger RenderThreadUpdate() or otherwise
+///          re-enter the manager, as this may lead to deadlocks, unbounded recursion, or
+///          inconsistent internal state.
+///          The callback MUST NOT throw exceptions. It must handle any errors internally.
+///
+///          If follow-up work is required, the callback should only enqueue work to be
+///          processed later (e.g. push a task into a user-owned queue) and return promptly.
+///
+/// \param [in] pDstTexture - Destination texture passed to ScheduleTextureUpdate().
+/// \param [in] DstMipLevel - Destination mip level passed to ScheduleTextureUpdate().
+/// \param [in] DstSlice    - Destination array slice passed to ScheduleTextureUpdate().
+/// \param [in] DstBox      - Destination box passed to ScheduleTextureUpdate().
+/// \param [in] pUserData   - User-provided pointer passed to ScheduleTextureUpdate().
+typedef void (*GPUTextureUploadEnqueuedCallbackType)(ITexture*     pDstTexture,
+                                                     Uint32        DstMipLevel,
+                                                     Uint32        DstSlice,
+                                                     const Box REF DstBox,
+                                                     void*         pUserData);
+
+
+/// Callback function type for copying texture data.
+/// This callback is invoked on the render thread when the manager needs to perform the copy operation for a texture update.
+/// The callback is expected to perform the copy operation itself, using the provided parameters, and schedule it for execution on the GPU.
+///
+/// \param [in] pContext    - Device context to use for scheduling the copy operation.
+/// \param [in] DstMipLevel - Destination mip level in the texture where the update will be applied.
+/// \param [in] DstSlice    - Destination array slice in the texture where the update will be applied.
+/// \param [in] DstBox      - Destination box in the texture where the update will be applied.
+/// \param [in] SrcData     - Source data description.
+/// \param [in] pUserData   - User-provided pointer passed to ScheduleTextureUpdate().
+///
+/// If the copy operation was not scheduled by the time the manager is stopped or destroyed,
+/// or if scheduling is otherwise abandoned, the callback will be called
+/// with a null device context pointer so that the application can clean up any resources
+/// associated with the copy operation.
+///
+/// \warning Reentrancy / thread-safety:
+///          The callback is normally executed from inside IGPUUploadManager::RenderThreadUpdate().
+///          If scheduling is abandoned, it may be executed with a null context pointer
+///          from inside ScheduleTextureUpdate() or the manager stop/destruction path.
+///          The callback MUST NOT call back into the same IGPUUploadManager instance
+///          (e.g. ScheduleTextureUpdate(), RenderThreadUpdate(), GetStats()), and MUST NOT
+///          perform actions that may synchronously trigger RenderThreadUpdate() or otherwise
+///          re-enter the manager, as this may lead to deadlocks, unbounded recursion, or
+///          inconsistent internal state.
+///          The callback MUST NOT throw exceptions. It must handle any errors internally.
+///
+///          If follow-up work is required, the callback should only enqueue work to be
+///          processed later (e.g. push a task into a user-owned queue) and return promptly.
+typedef void (*CopyStagingTextureCallbackType)(IDeviceContext*             pContext,
+                                               Uint32                      DstMipLevel,
+                                               Uint32                      DstSlice,
+                                               const Box REF               DstBox,
+                                               const TextureSubResData REF SrcData,
+                                               void*                       pUserData);
+
+
+/// Direct3D11-specific callback function type for copying texture data.
+/// This callback is invoked on the render thread when the manager needs to perform the copy operation for a texture update.
+/// The callback is expected to perform the copy operation itself, using the provided parameters, and schedule it for execution on the GPU.
+///
+/// \param [in] pContext    - Device context to use for scheduling the copy operation.
+/// \param [in] DstMipLevel - Destination mip level in the texture where the update will be applied.
+/// \param [in] DstSlice    - Destination array slice in the texture where the update will be applied.
+/// \param [in] DstBox      - Destination box in the texture where the update will be applied.
+/// \param [in] pSrcTexture - Pointer to the staging texture containing the source data.
+/// \param [in] SrcX        - X offset in the staging texture where the source data starts.
+/// \param [in] SrcY        - Y offset in the staging texture where the source data starts.
+/// \param [in] pUserData   - User-provided pointer passed to ScheduleTextureUpdate().
+///
+/// If the copy operation was not scheduled by the time the manager is stopped or destroyed,
+/// or if scheduling is otherwise abandoned, the callback will be called
+/// with a null device context pointer and a null source texture so that the application
+/// can clean up any resources associated with the copy operation.
+///
+/// \warning Reentrancy / thread-safety:
+///          The callback is normally executed from inside IGPUUploadManager::RenderThreadUpdate().
+///          If scheduling is abandoned, it may be executed with a null context pointer
+///          from inside ScheduleTextureUpdate() or the manager stop/destruction path.
+///          The callback MUST NOT call back into the same IGPUUploadManager instance.
+///          The callback MUST NOT throw exceptions. It must handle any errors internally.
+typedef void (*CopyStagingD3D11TextureCallbackType)(IDeviceContext* pContext,
+                                                    Uint32          DstMipLevel,
+                                                    Uint32          DstSlice,
+                                                    const Box REF   DstBox,
+                                                    ITexture*       pSrcTexture,
+                                                    Uint32          SrcX,
+                                                    Uint32          SrcY,
+                                                    void*           pUserData);
+
+
+/// Structure describing a texture update operation to be scheduled by IGPUUploadManager::ScheduleTextureUpdate().
+struct ScheduleTextureUpdateInfo
+{
+    /// If calling ScheduleTextureUpdate() from the render thread, a pointer to the device context.
+    /// If no manager context has been set yet, this context becomes the manager context.
+    /// Otherwise, it must be the same as the manager context.
+    /// If calling ScheduleTextureUpdate() from a worker thread, this parameter must be null.
+    IDeviceContext* pContext DEFAULT_INITIALIZER(nullptr);
+
+    /// Pointer to the destination texture to update.
+    /// If CopyTexture callback is provided, the manager will keep a reference to the texture
+    /// until the copy operation is scheduled by the callback.
+    /// Otherwise, this texture will be used as the destination for the copy operation
+    ITexture* pDstTexture DEFAULT_INITIALIZER(nullptr);
+
+    /// Destination texture format, used when pDstTexture is null.
+    TEXTURE_FORMAT Format DEFAULT_INITIALIZER(TEX_FORMAT_UNKNOWN);
+
+    /// State transition mode for the destination texture. This parameter is ignored if CopyTexture/CopyD3D11Texture callback is provided,
+    /// and the callback is expected to perform any necessary state transitions itself.
+    RESOURCE_STATE_TRANSITION_MODE DstTextureTransitionMode DEFAULT_INITIALIZER(RESOURCE_STATE_TRANSITION_MODE_TRANSITION);
+
+    /// Destination mip level in the texture where the update will be applied.
+    /// This parameter is ignored if CopyTexture callback is provided.
+    Uint32 DstMipLevel DEFAULT_INITIALIZER(0);
+
+    /// Destination array slice in the texture where the update will be applied.
+    /// This parameter is ignored if CopyTexture callback is provided.
+    Uint32 DstSlice DEFAULT_INITIALIZER(0);
+
+    /// Destination box in the texture where the update will be applied.
+    Box DstBox DEFAULT_INITIALIZER({});
+
+    /// Pointer to the source data to copy to the destination texture.
+    /// The manager makes an internal copy of the source data, so the memory pointed to by this
+    /// parameter can be safely released or reused after the method returns.
+    /// If WriteDataCallback callback is provided, this parameter will be ignored, and the callback must
+    /// write the source data to the staging texture when requested by the manager.
+    const void* pSrcData DEFAULT_INITIALIZER(nullptr);
+
+    /// Source data stride in bytes.
+    Uint64 Stride DEFAULT_INITIALIZER(0);
+
+    /// Source data depth stride in bytes.
+    Uint64 DepthStride DEFAULT_INITIALIZER(0);
+
+    /// Optional callback to write data to a staging texture. If provided, the pSrcData parameter is ignored,
+    /// and the manager will call the callback with a pointer to the staging texture memory when it needs to
+    /// write data to a staging texture page.
+    /// The callback will be called from ScheduleTextureUpdate().
+    WriteStagingTextureDataCallbackType WriteDataCallback DEFAULT_INITIALIZER(nullptr);
+
+    /// Optional pointer to user data that will be passed to the WriteDataCallback.
+    void* pWriteDataCallbackUserData DEFAULT_INITIALIZER(nullptr);
+
+
+    /// Optional callback to perform the copy operation. If this parameter is null, the manager will perform the copy
+    /// from the source data to the destination texture using its internal staging buffer and copy command.
+    /// If the callback is provided, it must perform the copy operation itself. The manager will pass the
+    /// necessary parameters to the callback.
+    ///
+    /// \note   This callback is used on all graphics backends, except Direct3D11 because it does not support copying from a
+    ///         buffer to a texture. For Direct3D11, the CopyD3D11Texture callback is used instead, which provides a pointer
+    ///         to the staging texture
+    CopyStagingTextureCallbackType CopyTexture DEFAULT_INITIALIZER(nullptr);
+
+    /// Optional Direct3D11-specific callback to perform the copy operation.
+    /// This callback is only called for Direct3D11 backend.
+    CopyStagingD3D11TextureCallbackType CopyD3D11Texture DEFAULT_INITIALIZER(nullptr);
+
+    /// Optional pointer to user data that will be passed to the CopyTexture callback.
+    void* pCopyTextureData DEFAULT_INITIALIZER(nullptr);
+
+
+    /// Optional callback to be called when the GPU copy operation is scheduled for execution.
+    /// If the backend-specific copy callback is provided (CopyTexture on most backends or
+    /// CopyD3D11Texture on Direct3D11), this callback is ignored and will not be called,
+    /// including when scheduling is abandoned. The copy callback is expected to perform any
+    /// necessary follow-up and cleanup work. Providing both callbacks will produce a warning.
+    /// If no copy callback is provided and scheduling is abandoned, the callback may be called
+    /// with a null destination texture so the application can release callback-specific user data.
+    GPUTextureUploadEnqueuedCallbackType UploadEnqueued DEFAULT_INITIALIZER(nullptr);
+
+    /// Optional pointer to user data that will be passed to the UploadEnqueued callback.
+    void* pUploadEnqueuedData DEFAULT_INITIALIZER(nullptr);
+};
+typedef struct ScheduleTextureUpdateInfo ScheduleTextureUpdateInfo;
+
+
+/// GPU upload manager page bucket information.
+struct GPUUploadManagerBucketInfo
+{
+    /// Page size in bytes.
+    /// For Direct3D11 texture upload stream, this is the upload texture size (width and height).
+    /// Otherwise, this is the size of the upload page in bytes.
+    Uint32 PageSize DEFAULT_INITIALIZER(0);
+
+    /// Number of pages currently in the manager.
+    Uint32 NumPages DEFAULT_INITIALIZER(0);
+};
+typedef struct GPUUploadManagerBucketInfo GPUUploadManagerBucketInfo;
+
+
+/// GPU upload manager stream statistics.
+struct GPUUploadManagerStreamStats
+{
+    /// For Direct3D11 only: texture format for texture upload stream.
+    TEXTURE_FORMAT Format DEFAULT_INITIALIZER(TEX_FORMAT_UNKNOWN);
+
+    /// Page size in bytes for this stream.
+    /// If Format is not TEX_FORMAT_UNKNOWN, this is the upload texture size (width and height).
+    /// Otherwise, this is the size of the upload page in bytes.
+    Uint32 PageSize DEFAULT_INITIALIZER(0);
+
+    /// The number of pages in the manager.
+    Uint32 NumPages DEFAULT_INITIALIZER(0);
+
+    /// The number of free pages that are ready to be written to.
+    Uint32 NumFreePages DEFAULT_INITIALIZER(0);
+
+    /// The peak number of pages that were created by the manager. This value can exceed the maximum page count,
+    /// but only temporarily when the manager needs to create new pages to accommodate large updates.
+    Uint32 PeakNumPages DEFAULT_INITIALIZER(0);
+
+    /// The peak pending update size in bytes. This is the maximum total size of all pending buffer updates
+    /// that could not be enqueued immediately due to lack of free pages.
+    Uint32 PeakTotalPendingUpdateSize DEFAULT_INITIALIZER(0);
+
+    /// Peak size of a single update in bytes.
+    Uint32 PeakUpdateSize DEFAULT_INITIALIZER(0);
+
+    /// The number of buckets in the manager. Each bucket corresponds to a specific page size.
+    Uint32 NumBuckets DEFAULT_INITIALIZER(0);
+
+    /// Information about each bucket. The array contains NumBuckets valid entries.
+    /// The pointer is valid only until the next call to GetStats().
+    const GPUUploadManagerBucketInfo* pBucketInfo DEFAULT_INITIALIZER(nullptr);
+};
+typedef struct GPUUploadManagerStreamStats GPUUploadManagerStreamStats;
+
+/// GPU upload manager statistics.
+struct GPUUploadManagerStats
+{
+    /// An array of NumStreams stream statistics.
+    const GPUUploadManagerStreamStats* pStreamStats DEFAULT_INITIALIZER(nullptr);
+
+    /// The number of streams in the pStreamStats array.
+    Uint32 NumStreams DEFAULT_INITIALIZER(0);
+
+    /// The number of pages that are currently being used by the GPU for copy operations.
+    Uint32 NumInFlightPages DEFAULT_INITIALIZER(0);
+};
+typedef struct GPUUploadManagerStats GPUUploadManagerStats;
+
+
+// clang-format off
+
+// {1C5CF903-9E24-4B2C-9D63-FE63D49BE1F6}
+static DILIGENT_CONSTEXPR INTERFACE_ID IID_GPUUploadManager =
+    { 0x1c5cf903, 0x9e24, 0x4b2c, { 0x9d, 0x63, 0xfe, 0x63, 0xd4, 0x9b, 0xe1, 0xf6 } };
+
+#define DILIGENT_INTERFACE_NAME IGPUUploadManager
+#include "../../../Primitives/interface/DefineInterfaceHelperMacros.h"
+
+#define IGPUUploadManagerInclusiveMethods \
+    IObjectInclusiveMethods;              \
+    IGPUUploadManagerMethods GPUUploadManager
+
+/// Asynchronous GPU upload manager
+DILIGENT_BEGIN_INTERFACE(IGPUUploadManager, IObject)
+{
+    /// Executes pending render-thread operations.
+    ///
+    /// The method can be called in parallel with ScheduleBufferUpdate() and ScheduleTextureUpdate()
+    /// from worker threads, but only one thread is allowed to call RenderThreadUpdate() at a time.
+    /// RenderThreadUpdate() must not be called concurrently with Stop(), and the device context
+    /// used by the manager must not be used concurrently by other threads.
+    /// pContext must not be null. If no context was provided at creation, the first context
+    /// passed to RenderThreadUpdate() becomes the manager context. Otherwise, it must be
+    /// the same as the manager context.
+    ///
+    /// The method must be called periodically to process pending updates. If the method is not called,
+    /// ScheduleBufferUpdate() or ScheduleTextureUpdate() may block indefinitely when there are no free
+    /// pages available for new updates.
+    VIRTUAL void METHOD(RenderThreadUpdate)(THIS_
+                                            IDeviceContext* pContext) PURE;
+
+    /// Schedules an asynchronous buffer update operation.
+    ///
+    /// \param [in] UpdateInfo - Structure describing the buffer update operation. See ScheduleBufferUpdateInfo for details.
+    ///
+    /// \return true if the update was successfully accepted by the manager, false if it was rejected
+    ///         due to invalid parameters, a stopped manager, or an internal scheduling failure.
+    ///         If false is returned, any abandoned-scheduling callback is invoked before the method returns.
+    ///
+    /// The method is thread-safe for worker-thread calls that use a null pContext. These calls can be made from multiple threads
+    /// simultaneously with other worker-thread ScheduleBufferUpdate() calls and RenderThreadUpdate().
+    /// Calls that provide a non-null pContext use the device context and must be externally serialized with RenderThreadUpdate(),
+    /// Stop(), GetStats(), and other use of the same context.
+    /// The caller must keep the upload manager alive for the entire duration of this call. Worker threads should
+    /// hold their own strong reference to the manager if the manager may be stopped or released concurrently.
+    /// Calls admitted before Stop() may complete; calls admitted after Stop() are ignored and return false.
+    /// Calls must not race with manager destruction.
+    ///
+    /// Accepted updates are not ordered by submission time. Updates may be submitted to different
+    /// internal streams or different pages and can be executed or reported through callbacks in a
+    /// different order than ScheduleBufferUpdate() calls were made. If the final contents depend on
+    /// the order of overlapping destination ranges, schedule the later update only after the earlier
+    /// update's callback has reported that it was enqueued, or submit one update with the final data.
+    /// 
+    /// If the method is called from a worker thread, the pContext parameter must be null, and the render thread must periodically
+    /// call RenderThreadUpdate() to process pending buffer updates. If RenderThreadUpdate() is not called, the method may block indefinitely
+    /// when there are no free pages available for new updates.
+    /// 
+    /// If the method is called from the render thread, the pContext parameter must be a pointer
+    /// to the manager context. If no manager context has been set yet, pContext becomes the manager
+    /// context. If the method is called from the render thread with null pContext, it may never return.
+    VIRTUAL bool METHOD(ScheduleBufferUpdate)(THIS_
+                                              const ScheduleBufferUpdateInfo REF UpdateInfo) PURE;
+
+
+    /// Schedules an asynchronous texture update operation.
+    ///
+    /// \param [in] UpdateInfo - Structure describing the texture update operation. See ScheduleTextureUpdateInfo for details.
+    ///
+    /// \return true if the update was successfully accepted by the manager, false if it was rejected
+    ///         due to invalid parameters, a stopped manager, or an internal scheduling failure.
+    ///         If false is returned, any abandoned-scheduling callback is invoked before the method returns.
+    /// 
+    /// The method is thread-safe for worker-thread calls that use a null pContext. These calls can be made from multiple threads
+    /// simultaneously with other worker-thread ScheduleTextureUpdate() calls and RenderThreadUpdate().
+    /// Calls that provide a non-null pContext use the device context and must be externally serialized with RenderThreadUpdate(),
+    /// Stop(), GetStats(), and other use of the same context.
+    /// The caller must keep the upload manager alive for the entire duration of this call. Worker threads should
+    /// hold their own strong reference to the manager if the manager may be stopped or released concurrently.
+    /// Calls admitted before Stop() may complete; calls admitted after Stop() are ignored and return false.
+    /// Calls must not race with manager destruction.
+    ///
+    /// Accepted updates are not ordered by submission time. Updates may be submitted to different
+    /// internal streams or different pages and can be executed or reported through callbacks in a
+    /// different order than ScheduleTextureUpdate() calls were made. If the final contents depend on
+    /// the order of overlapping destination regions, schedule the later update only after the earlier
+    /// update's callback has reported that it was enqueued, or submit one update with the final data.
+    /// 
+    /// If the method is called from a worker thread, the pContext parameter must be null, and the render thread must periodically
+    /// call RenderThreadUpdate() to process pending texture updates. If RenderThreadUpdate() is not called, the method may block indefinitely
+    /// when there are no free pages available for new updates.
+    /// 
+    /// If the method is called from the render thread, the pContext parameter must be a pointer
+    /// to the manager context. If no manager context has been set yet, pContext becomes the manager
+    /// context. If the method is called from the render thread with null pContext, it may never return.
+    VIRTUAL bool METHOD(ScheduleTextureUpdate)(THIS_
+                                               const ScheduleTextureUpdateInfo REF UpdateInfo) PURE;
+
+    /// Retrieves GPU upload manager statistics.
+    ///
+    /// The method must not be called concurrently with RenderThreadUpdate(), GetStats(), or
+    /// ScheduleBufferUpdate()/ScheduleTextureUpdate() calls that provide a non-null device context.
+    /// It may be called concurrently with worker-thread ScheduleBufferUpdate()/ScheduleTextureUpdate()
+    /// calls that use a null device context.
+    /// 
+    /// Pointers returned in the Stats structure are valid only until the next call to GetStats()
+    /// and must not be used after that.
+    VIRTUAL void METHOD(GetStats)(THIS_
+                                  GPUUploadManagerStats REF Stats) PURE;
+
+    /// Permanently stops the upload manager.
+    ///
+    /// \param [in] pContext - Device context used to release staging resources. Must not be null.
+    ///
+    /// The method wakes any threads blocked in ScheduleBufferUpdate() or ScheduleTextureUpdate().
+    /// After this call, the manager must not be used for new upload scheduling, render-thread
+    /// updates, or statistics queries; only releasing outstanding references is allowed.
+    /// Worker-thread calls that are already blocked in ScheduleBufferUpdate() or ScheduleTextureUpdate()
+    /// are cancelled and invoke their callbacks with null handles as the calls return.
+    /// Accepted updates that have not yet been submitted by RenderThreadUpdate() are abandoned and
+    /// will invoke their callbacks with null handles during manager teardown. RenderThreadUpdate()
+    /// and GetStats() calls after Stop() are misuse.
+    ///
+    /// Stop() waits for admitted scheduling calls to return and releases staging resources using pContext.
+    /// If the manager context has not been set yet, pContext becomes the manager context.
+    /// Otherwise, pContext must be the same as the manager context. The context must not be used
+    /// concurrently while Stop() is executing. Internal stream/page objects remain alive until the
+    /// manager is destroyed.
+    ///
+    /// Stop() is a render-thread/context-owning call. The first Stop() call must be made
+    /// from the render thread and must not race with RenderThreadUpdate(), GetStats(),
+    /// another Stop() call, or ScheduleBufferUpdate()/ScheduleTextureUpdate() calls that
+    /// provide a non-null device context. After Stop() has completed, subsequent Stop()
+    /// calls are no-ops and return immediately.
+    ///
+    /// The method may be called while worker threads are inside ScheduleBufferUpdate() or
+    /// ScheduleTextureUpdate(). The manager must remain alive until these calls have returned.
+    /// The first Stop() call must not be made while other render-thread/context-owning
+    /// upload-manager calls are running.
+    ///
+    /// If Stop() is not called explicitly, the manager destructor performs the same internal stop
+    /// sequence using the stored manager context from whichever thread releases the last reference.
+    /// If no context has ever been provided to the manager, destructor cleanup proceeds without a
+    /// context; in this case no staging resources have been mapped through the manager.
+    VIRTUAL void METHOD(Stop)(THIS_
+                              IDeviceContext* pContext) PURE;
+};
+DILIGENT_END_INTERFACE
+
+#include "../../../Primitives/interface/UndefInterfaceHelperMacros.h"
+
+#if DILIGENT_C_INTERFACE
+
+// clang-format off
+
+#    define IGPUUploadManager_RenderThreadUpdate(This, ...)    CALL_IFACE_METHOD(GPUUploadManager, RenderThreadUpdate, This, __VA_ARGS__)
+#    define IGPUUploadManager_Stop(This, ...)                  CALL_IFACE_METHOD(GPUUploadManager, Stop,               This, __VA_ARGS__)
+#    define IGPUUploadManager_ScheduleBufferUpdate(This, ...)  CALL_IFACE_METHOD(GPUUploadManager, ScheduleBufferUpdate, This, __VA_ARGS__)
+#    define IGPUUploadManager_ScheduleTextureUpdate(This, ...) CALL_IFACE_METHOD(GPUUploadManager, ScheduleTextureUpdate, This, __VA_ARGS__)
+#    define IGPUUploadManager_GetStats(This, ...)              CALL_IFACE_METHOD(GPUUploadManager, GetStats, This, __VA_ARGS__)
+
+// clang-format on
+
+#else
+
+std::string GetGPUUploadManagerStatsString(const GPUUploadManagerStats& Stats);
+
+#endif
+
+/// Creates an instance of the GPU upload manager.
+void DILIGENT_GLOBAL_FUNCTION(CreateGPUUploadManager)(const GPUUploadManagerCreateInfo REF CreateInfo,
+                                                      IGPUUploadManager**                  ppManager);
+
+#include "../../../Primitives/interface/UndefRefMacro.h"
+
+DILIGENT_END_NAMESPACE // namespace Diligent

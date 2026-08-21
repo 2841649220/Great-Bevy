@@ -1,0 +1,28 @@
+[package]
+name = "diligent-rs"
+version = "0.1.0"
+edition = "2024"
+description = "Minimal safe RAII wrapper around the DiligentEngine (DiligentCore) C API exposed by diligent-sys"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/bevyengine/bevy"
+categories = ["game-engines", "graphics", "api-bindings", "memory-management"]
+keywords = ["diligent", "graphics", "ffi", "raii", "d3d12"]
+
+[dependencies]
+diligent-sys = { path = "../diligent-sys" }
+# Pinned to the version the Bevy fork locks (root Cargo.lock). Used for the
+# wgpu <-> Diligent texture format mapping table (src/format.rs).
+wgpu-types = { version = "29.0.4", default-features = false }
+
+[dev-dependencies]
+winit = { version = "0.30", default-features = false, features = ["rwh_06"] }
+raw-window-handle = "0.6"
+
+[lib]
+name = "diligent_rs"
+
+# Standalone workspace, same pattern as crates/diligent-sys: the repo root
+# workspace is currently unusable from the root directory (see
+# crates/diligent-sys/Cargo.toml for the full explanation). Build with:
+#   cargo build --manifest-path crates/diligent-rs/Cargo.toml
+[workspace]

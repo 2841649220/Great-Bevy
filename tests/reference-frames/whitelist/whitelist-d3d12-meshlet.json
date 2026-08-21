@@ -1,0 +1,53 @@
+{
+  "schema_version": "1.0",
+  "whitelist_id": "whitelist-d3d12-meshlet",
+  "scene": "meshlet",
+  "tier": "windows-d3d12-whitelist",
+  "platform_pair": {
+    "baseline": { "engine": "wgpu", "api": "vulkan", "role": "reference" },
+    "candidate": { "engine": "diligent", "api": "d3d12", "role": "replacement" }
+  },
+  "thresholds": {
+    "ssim": null,
+    "psnr_db": null,
+    "mean_abs_diff": null,
+    "max_abs_diff": null,
+    "diff_histogram_p95": null,
+    "notes": "D3D12 放宽档阈值占位（README §2：阈值放宽，放宽仅限预置四类系统性差异来源）；数值须 M2a 实测直方图分布后校准，不得预先编造。"
+  },
+  "categories": [
+    {
+      "id": "rasterization_rules",
+      "label": "光栅化规则",
+      "description": "D3D12 与 Vulkan 光栅化规则差异所致的系统性边界差异：fill rule/像素中心约定、三角边沿裁剪、光栅化覆盖测试差异（MSAA 已强制 Off）。",
+      "policy": "whitelistable",
+      "expected_differences": [],
+      "notes": "系统性差异可入档（README §2 流程 2），须带理由。meshlet 含高密度网格轮廓与 LOD 切换边沿，关注边沿覆盖差异；随机抖动一律排查。"
+    },
+    {
+      "id": "depth_range",
+      "label": "深度范围",
+      "description": "D3D12 深度约定差异：clip 空间 [0,1]（near=0）与 Bevy reverse-Z（1.0=近、0.0=远，README §5.1）之间的系统性变换/偏置差异。",
+      "policy": "whitelistable",
+      "expected_differences": [],
+      "notes": "深度对照（depth_<n>.exr）重点类别；D3D12 侧注意 [0,1] near=0 与 reverse-Z 的映射转换后再比较（README §5.1）。"
+    },
+    {
+      "id": "sample_coordinates",
+      "label": "采样坐标",
+      "description": "纹素中心/半纹素偏移约定、梯度（ddx/ddy）与 mip 选择差异所致的系统性采样差异。",
+      "policy": "investigate_first",
+      "expected_differences": [],
+      "notes": "采样/浮点类差异一律先排查（README §2 流程 4、§10.3）。meshlet 渲染的顶点/纹理采样路径为潜在系统性采样差异来源；查明系统性并附结论后才可入档，否则禁止。"
+    },
+    {
+      "id": "blend_precision",
+      "label": "blend 精度",
+      "description": "固定功能混合在 D3D12 与 Vulkan 间的舍入/精度系统性差异（HDR/浮点混合、blend 边沿通道小偏移）。",
+      "policy": "whitelistable",
+      "expected_differences": [],
+      "notes": "meshlet 为不透明高密度网格，blend 差异预计弱相关；如出现通道级小偏移须按系统性核实后入档。"
+    }
+  ],
+  "notes": "预置占位文件（Task 13）：全部 expected_differences 为空，待 M2a 实测填充。meshlet 场景未实现（需 root features meshlet,https,free_camera + 网格下载，工具报 exit 3，README §6）；本文件先行为 M2a 对照预置档位，无参考帧前不填差异条目。"
+}

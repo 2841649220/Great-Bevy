@@ -1,0 +1,58 @@
+{
+  "tool": "reference_frames",
+  "tool_version": "0.1.0",
+  "bevy_version": "0.19.0 (fork)",
+  "wgpu_version": "29.0.4",
+  "platform": "windows",
+  "arch": "x86_64",
+  "scene": "3d_scene",
+  "frame": 227,
+  "width": 1280,
+  "height": 720,
+  "surface_logical_size": [
+    1280.0,
+    720.0
+  ],
+  "scale_factor": 1.0,
+  "pixel_format": "Bgra8UnormSrgb",
+  "captured_at_unix_secs": 1785984181,
+  "captured_at_utc": "2026-08-06T02:43:01Z",
+  "capture_source": "Screenshot::primary_window (bevy_render::view::screenshot); depth: Core3d graph node + MAP_READ buffer",
+  "image_uniform": false,
+  "files": {
+    "png": "frame_0227.png",
+    "exr": "frame_0227.exr",
+    "json": "frame_0227.json",
+    "depth": "depth_0227.exr"
+  },
+  "depth": {
+    "file": "depth_0227.exr",
+    "format": "Depth32Float, exported as Rgb32F EXR (R=G=B=depth)",
+    "value_range": "[0, 1]: 1.0 = near plane, 0.0 = far (background/sky)",
+    "projection": "perspective_infinite_reverse_rh (near=0.1, far=inf)",
+    "source_pass": "ViewDepthTexture (main 3d pass depth attachment) copied after main passes",
+    "msaa": "Off (single-sample depth texture required for texel copy)",
+    "clear_value": 0.0,
+    "uniform": false,
+    "stats": {
+      "min": 0.0,
+      "max": 0.014747106,
+      "mean": 0.0022119454,
+      "non_finite": 0
+    }
+  },
+  "adapter": {
+    "name": "NVIDIA GeForce RTX 3050 Ti Laptop GPU",
+    "vendor": 4318,
+    "device": 9632,
+    "device_type": "DiscreteGpu",
+    "driver": "NVIDIA",
+    "driver_info": "610.74",
+    "backend": "Vulkan"
+  },
+  "determinism": {
+    "camera": "fixed per scene (registry camera rig)",
+    "time_source": "manual frame counter + DeterministicClock (fixed 1/60 delta per frame)",
+    "animation_seed": "none for static scenes; DefaultHasher over fixed coords where used"
+  }
+}

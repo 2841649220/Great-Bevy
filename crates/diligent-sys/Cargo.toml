@@ -1,0 +1,40 @@
+[package]
+name = "diligent-sys"
+version = "0.1.0"
+edition = "2024"
+description = "Raw bindgen-generated FFI bindings to the DiligentEngine (DiligentCore) C API, with a cmake build script for the native library"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/bevyengine/bevy"
+categories = ["api-bindings", "game-engines", "graphics"]
+keywords = ["diligent", "graphics", "ffi", "bindings"]
+build = "build.rs"
+
+[package.metadata.diligent]
+# Path to the DiligentCore checkout, relative to this manifest.
+path = "../../third_party/DiligentEngine"
+# C API interface headers live under Graphics/GraphicsEngine/interface
+# (plus GraphicsEngineD3D12/interface and GraphicsEngineVulkan/interface).
+# See README.md for how to fetch missing ThirdParty submodules.
+
+[dependencies]
+libc = "0.2"
+
+[build-dependencies]
+bindgen = "0.72"
+flate2 = "1"
+tar = "0.4"
+
+[lib]
+name = "diligent_sys"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+# Standalone workspace (same pattern as tools/m0_shader_smoke): the repo root
+# workspace is currently unusable from the root directory because
+# tools/m0_shader_smoke declares its own [workspace] while also matching the
+# root's "tools/*" member glob (cargo: "multiple workspace roots found in the
+# same workspace"). Build this crate with:
+#   cargo build --manifest-path crates/diligent-sys/Cargo.toml
+# Once tools/m0_shader_smoke is converted to a plain package (or excluded),
+# this crate can drop the [workspace] table and join the root workspace
+# through the existing "crates/*" member glob without any further changes.
+[workspace]

@@ -1,0 +1,21 @@
+[package]
+name = "reference_frames"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "M0 reference-frame capture toolchain for the rendering-backend-replacement project (captures wgpu 29.0.4 output before the wgpu path is removed in M1)"
+
+# Determinism-first capture tool: fixed camera rigs, manual frame stepping,
+# per-frame PNG + EXR + JSON metadata sidecars under tests/reference-frames/.
+# Layered on top of the fork purely via public Bevy APIs (plugins/systems).
+# See tests/reference-frames/README.md for the capture methodology.
+
+[dependencies]
+bevy = { path = "../..", default-features = false, features = ["3d", "default_platform", "exr"] }
+argh = "0.1.12"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1.0.140"
+# Same `image` crate version as bevy_image (0.25.9, single version in Cargo.lock).
+# Features: png (PNG encode/decode) + exr (OpenEXR encode/decode). EXR save of
+# float color frames is the current depth-buffer stand-in (see README).
+image = { version = "0.25.9", default-features = false, features = ["png", "exr"] }

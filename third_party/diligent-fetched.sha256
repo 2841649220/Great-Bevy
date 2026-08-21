@@ -1,0 +1,5 @@
+# diligent-sys codeload backfill checksums
+# format: <sha256>  <repo>  <url>
+53fbc951fc212e0568c4d73b175dad5f8ec803abc01afad2fe0ab0d8f54ba40d  SPIRV-Cross  https://codeload.github.com/DiligentGraphics/SPIRV-Cross/tar.gz/refs/heads/master
+# pinned commit (Task 15, 2026-08-06): DiligentGraphics/SPIRV-Cross master HEAD 1a61695 (2026-04-30); content verified byte-identical to checkout and to master-ref tarball (4747/4747 files)
+0f295b214b164e42a1d21537c8da7b44569806c16220dda9798558edfaacd11e  SPIRV-Cross  https://codeload.github.com/DiligentGraphics/SPIRV-Cross/tar.gz/1a6169566c73d3da552748fc372fe2bbb856e46e

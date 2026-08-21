@@ -1,0 +1,30 @@
+[package]
+name = "m0_shader_smoke"
+version = "0.1.0"
+edition = "2024"
+default-run = "m0_shader_smoke"
+
+# M0 S-A: batch compile smoke for all WGSL shaders in the fork.
+# Mirrors the fork's real compilation chain:
+#   naga_oil Composer (imports + preprocessor) -> naga validation -> SPIR-V (Vulkan) + HLSL (D3D12)
+# Using the same naga 29.0.4 / naga_oil 0.22.0 versions locked in Cargo.lock.
+#
+# Standalone workspace: the repo workspace (crates/*) contains in-progress
+# crates (e.g. diligent-sys) whose manifests may be mid-edit; the tool must
+# build regardless of their state. All dependency versions are exact pins.
+[workspace]
+
+# probe is a diagnostic single-file compiler; cargo run targets the batch tool.
+[[bin]]
+name = "m0_shader_smoke"
+path = "src/main.rs"
+
+[[bin]]
+name = "probe"
+path = "src/bin/probe.rs"
+
+[dependencies]
+naga = { version = "29.0.4", features = ["wgsl-in", "spv-out", "hlsl-out"] }
+naga_oil = { version = "0.22.0", default-features = false, features = ["test_shader"] }
+wgpu-types = { version = "29.0.4", default-features = false }
+wgpu-naga-bridge = { version = "29.0.4", default-features = false }

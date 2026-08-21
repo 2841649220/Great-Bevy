@@ -1,0 +1,301 @@
+/*
+ *  Copyright 2019-2026 Diligent Graphics LLC
+ *
+ *  Licensed under the Apache License, Version 2.0 (the "License");
+ *  you may not use this file except in compliance with the License.
+ *  You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ *  Unless required by applicable law or agreed to in writing, software
+ *  distributed under the License is distributed on an "AS IS" BASIS,
+ *  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ *  See the License for the specific language governing permissions and
+ *  limitations under the License.
+ *
+ *  In no event and under no legal theory, whether in tort (including negligence),
+ *  contract, or otherwise, unless required by applicable law (such as deliberate
+ *  and grossly negligent acts) or agreed to in writing, shall any Contributor be
+ *  liable for any damages, including any direct, indirect, special, incidental,
+ *  or consequential damages of any character arising as a result of this License or
+ *  out of the use or inability to use the software (including but not limited to damages
+ *  for loss of goodwill, work stoppage, computer failure or malfunction, or any and
+ *  all other commercial damages or losses), even if such Contributor has been advised
+ *  of the possibility of such damages.
+ */
+
+#pragma once
+
+/// \file
+/// Declaration of DynamicTextureArray class
+
+#include <atomic>
+#include <string>
+
+#include "../../GraphicsEngine/interface/RenderDevice.h"
+#include "../../GraphicsEngine/interface/DeviceContext.h"
+#include "../../GraphicsEngine/interface/Texture.h"
+#include "../../GraphicsEngine/interface/Fence.h"
+#include "../../GraphicsEngine/interface/DeviceMemory.h"
+#include "../../../Common/interface/RefCntAutoPtr.hpp"
+
+namespace Diligent
+{
+
+/// Dynamic texture array create information.
+struct DynamicTextureArrayCreateInfo
+{
+    /// Texture array description.
+
+    /// - Desc.Type must be Diligent::RESOURCE_DIM_TEX_2D_ARRAY
+    /// - Desc.Format must not be Diligent::TEX_FORMAT_UNKNOWN
+    /// - `Desc.Width` and `Desc.Height` must not be zero
+    /// - Desc.Usage must be Diligent::USAGE_DEFAULT or Diligent::USAGE_SPARSE
+    TextureDesc Desc;
+
+    /// The number of slices in memory page.
+
+    /// This value is only relevant when Desc.Usage == Diligent::USAGE_SPARSE and
+    /// defines the number of texture array slices in one memory page.
+    Uint32 NumSlicesInMemoryPage = 1;
+};
+
+/// Dynamically resizable texture 2D array
+///
+/// \remarks GetDesc(), GetArraySize(), GetVersion(), and GetMemoryUsage()
+///          are thread-safe and may be called from worker threads. If these
+///          methods race with Update() or Resize(), the returned value is a
+///          snapshot and may become stale immediately.
+///
+///          All other methods are not thread-safe and must be externally
+///          synchronized: they must not race with each other or with Update()
+///          or Resize().
+///
+///          Sparse arrays require exactly one immediate context in
+///          TextureDesc::ImmediateContextMask. The context used by Resize()
+///          or Update() must be that context and support sparse binding.
+class DynamicTextureArray
+{
+public:
+    /// Initializes the dynamic texture array.
+
+    /// \param[in] pDevice    - Render device that will be used to create the texture array.
+    ///                         This parameter may be null (see remarks).
+    /// \param[in] CreateInfo - Texture array create information, see Diligent::DynamicTextureArrayCreateInfo.
+    ///
+    /// If `pDevice` is null, internal texture creation will be postponed
+    /// until Update() or Resize() is called.
+    DynamicTextureArray(IRenderDevice* pDevice, const DynamicTextureArrayCreateInfo& CreateInfo);
+
+    // clang-format off
+    DynamicTextureArray           (const DynamicTextureArray&)  = delete;
+    DynamicTextureArray& operator=(const DynamicTextureArray&)  = delete;
+    DynamicTextureArray           (      DynamicTextureArray&&) = delete;
+    DynamicTextureArray& operator=(      DynamicTextureArray&&) = delete;
+    // clang-format on
+
+
+    /// Resizes the texture array to the specified number of slices.
+
+    /// \param[in] pDevice        - Render device that will be used create new internal texture.
+    ///                             This parameter may be null (see remarks).
+    /// \param[in] pContext       - Device context that will be used to copy existing contents
+    ///                             to the new texture (when using non-sparse texture), or commit
+    ///                             new memory tiles (when using sparse texture).
+    ///                             This parameter may be null (see remarks).
+    /// \param[in] NewArraySize   - The new number of slices in the texture array.
+    /// \param[in] DiscardContent - Whether to discard previous texture content (for non-sparse textures).
+    ///
+    /// \return     Pointer to the current usable texture object. If replacement
+    ///             creation is deferred or fails, this is the committed texture.
+    ///
+    /// The method operation depends on which of `pDevice` and `pContext` parameters
+    /// are not null:
+    /// - Both `pDevice` and `pContext are` not null: internal texture is created (if necessary)
+    ///   and existing contents is copied (for non-sparse textures). Update() may be called with
+    ///   both pDevice and pContext being null.
+    /// - `pDevice` is not null, `pContext` is null: internal texture or additional memory pages
+    ///   are created, but existing contents is not copied and memory tiles are not bound.
+    ///   An application must provide non-null device context when calling Update().
+    /// - Both `pDevice` and `pContext` are null: internal texture or memory pages are not created.
+    ///   An application must provide non-null device and device context when calling
+    ///   Update().
+    ///
+    /// Typically `pContext` is null when the method is called from a worker thread.
+    ///
+    /// For a sparse texture, `NewArraySize` is rounded up to a multiple of
+    /// DynamicTextureArrayCreateInfo::NumSlicesInMemoryPage. GetArraySize()
+    /// reports this committed page-aligned resident capacity.
+    ///
+    /// A content-preserving default resize keeps the committed texture and its
+    /// views usable until replacement texture creation succeeds.
+    ///
+    /// After a replacement default texture has been created and its content copy
+    /// is pending, the method may only be called with the same `NewArraySize`, for
+    /// example to provide a context that was previously unavailable. Before the
+    /// replacement is created, the pending request may be retargeted or cancelled.
+    ///
+    /// If `NewArraySize` is zero, internal buffer will be released.
+    ITexture* Resize(IRenderDevice*  pDevice,
+                     IDeviceContext* pContext,
+                     Uint32          NewArraySize,
+                     bool            DiscardContent = false);
+
+
+    /// Updates the internal texture object.
+
+    /// \param[in] pDevice  - Render device that will be used to create a new texture,
+    ///                       if necessary (see remarks).
+    /// \param[in] pContext - Device context that will be used to copy existing
+    ///                       texture contents (when using non-sparse texture), or bind
+    ///                       memory tiles (when using sparse textures), if necessary
+    ///                       (see remarks).
+    /// \return               A pointer to the texture object.
+    ///
+    /// If the texture has been resized, but internal texture object has not been
+    /// initialized, `pDevice` and `pContext` must not be null.
+    ///
+    /// If the texture does not need to be updated (PendingUpdate() returns false),
+    /// both pDevice and pContext may be null.
+    ITexture* Update(IRenderDevice*  pDevice,
+                     IDeviceContext* pContext);
+
+
+    /// Returns a pointer to the texture object.
+
+    /// If the texture has not be initialized, the method returns null.
+    ///
+    /// If the texture may need to be updated (initialized or resized),
+    /// use the Update() method.
+    ///
+    /// \remarks The method is not thread-safe and must not race with other
+    ///          methods that may update the texture array.
+    ITexture* GetTexture() const
+    {
+        return m_pTexture;
+    }
+
+    /// Returns a shader resource view of the internal texture in the specified format.
+
+    /// The array returns the default SRV and, when typed texture views are
+    /// supported, an additional sRGB SRV for compatible typeless formats.
+    /// If the requested view is not available, the method returns null.
+    ///
+    /// The method does not create a view and must not race with Update() or Resize().
+    ITextureView* GetTextureSRV(TEXTURE_FORMAT ViewFormat) const;
+
+    /// Returns true if the texture must be updated before use (e.g. it has been resized,
+    /// but internal texture has not been initialized or updated).
+    /// When update is not pending, Update() may be called with null device and context.
+    ///
+    /// \remarks The method is not thread-safe and must not race with other
+    ///          methods that may update the texture array.
+    bool PendingUpdate() const
+    {
+        return m_PendingSize != GetArraySize();
+    }
+
+    /// Returns a snapshot of the texture description.
+    ///
+    /// \remarks The method is thread-safe and may be called from worker threads.
+    ///          If it races with Update() or Resize(), the returned value may
+    ///          become stale immediately.
+    TextureDesc GetDesc() const
+    {
+        TextureDesc Desc = m_Desc;
+        Desc.ArraySize   = GetArraySize();
+        Desc.Usage       = GetUsage();
+        return Desc;
+    }
+
+    /// Returns the current number of slices in the texture array.
+    ///
+    /// For a sparse texture, this is the committed page-aligned resident
+    /// capacity and may be greater than the size passed to Resize().
+    ///
+    /// \remarks The method is thread-safe and may be called from worker threads.
+    ///          If it races with Update() or Resize(), the returned value may
+    ///          become stale immediately.
+    Uint32 GetArraySize() const noexcept
+    {
+        return m_ArraySize.load(std::memory_order_acquire);
+    }
+
+    /// Returns dynamic texture version.
+
+    /// The version is incremented every time a new internal texture is created.
+    ///
+    /// \remarks The method is thread-safe and may be called from worker threads.
+    ///          If it races with Update() or Resize(), the returned value may
+    ///          become stale immediately.
+    Uint32 GetVersion() const
+    {
+        return m_Version.load(std::memory_order_acquire);
+    }
+
+    /// Returns the amount of memory currently used by the dynamic array, in bytes.
+    ///
+    /// \remarks The method is thread-safe and may be called from worker threads.
+    ///          If it races with Update() or Resize(), the returned value may
+    ///          become stale immediately.
+    Uint64 GetMemoryUsage() const;
+
+private:
+    void CommitResize(IRenderDevice*  pDevice,
+                      IDeviceContext* pContext,
+                      bool            AllowNull);
+
+    bool PrepareSparseResize();
+    bool ValidateSparseContext(IDeviceContext* pContext) const;
+    bool ResizeSparseTexture(IDeviceContext* pContext);
+    void CopyStaleTextureContents(IDeviceContext* pContext);
+
+    void CreateSparseTexture(IRenderDevice* pDevice);
+    bool CreateDefaultTexture(IRenderDevice* pDevice);
+    bool CreateResources(IRenderDevice* pDevice);
+    void FallbackToDefaultTexture() noexcept;
+
+    void ReleaseTextureViews() noexcept;
+    void UpdateTextureViews(IRenderDevice* pDevice);
+
+    void StoreArraySize(Uint32 ArraySize) noexcept
+    {
+        m_ArraySize.store(ArraySize, std::memory_order_release);
+    }
+
+    USAGE GetUsage() const noexcept
+    {
+        return static_cast<USAGE>(m_Usage.load(std::memory_order_acquire));
+    }
+
+    void StoreUsage(USAGE Usage) noexcept
+    {
+        m_Usage.store(static_cast<Uint32>(Usage), std::memory_order_release);
+    }
+
+    const std::string m_Name;
+    TextureDesc       m_Desc;
+    const Uint32      m_NumSlicesInPage;
+
+    std::atomic<Uint32> m_ArraySize{0};
+    std::atomic<Uint32> m_Usage{USAGE_DEFAULT};
+    std::atomic<Uint32> m_Version{0};
+    std::atomic<Uint64> m_SparseMemoryUsage{0};
+
+    Uint32 m_PendingSize = 0;
+
+    RefCntAutoPtr<ITexture>      m_pTexture;
+    RefCntAutoPtr<ITexture>      m_pStaleTexture;
+    RefCntAutoPtr<IDeviceMemory> m_pMemory;
+    RefCntAutoPtr<ITextureView>  m_SrgbSRV;
+
+    Uint64 m_MemoryPageSize = 0;
+
+    Uint64 m_NextBeforeResizeFenceValue = 1;
+    Uint64 m_NextAfterResizeFenceValue  = 1;
+
+    RefCntAutoPtr<IFence> m_pBeforeResizeFence;
+    RefCntAutoPtr<IFence> m_pAfterResizeFence;
+};
+
+} // namespace Diligent
