@@ -74,11 +74,11 @@ raw-window-handle = { version = "0.6", features = [
 # standalone workspace crate, consumed here as a read-only path dependency)
 diligent-rs = { path = "../diligent-rs" }
 # misc
-wgpu-types = { version = "29.0.3", default-features = false }
+wgpu-types = { version = "30.0.0", default-features = false }
 # hlsl-out / spv-out: the Diligent shader path compiles the naga module to
 # HLSL (D3D12) or SPIR-V (Vulkan) itself (M1b replacement point 1).
 # spv-in: SPIR-V shader input for the same path.
-naga = { version = "29.0.3", features = ["wgsl-in", "hlsl-out", "spv-out", "spv-in"] }
+naga = { version = "30.0.0", features = ["wgsl-in", "hlsl-out", "spv-out", "spv-in"] }
 bytemuck = { version = "1.5", features = ["derive", "must_cast"] }
 downcast-rs = { version = "2", default-features = false, features = ["std"] }
 thiserror = { version = "2", default-features = false }
