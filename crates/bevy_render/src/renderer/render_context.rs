@@ -1,8 +1,8 @@
 use super::{diligent_registry::DiligentHandle, RenderDevice, WgpuWrapper};
 use crate::diagnostic::internal::DiagnosticsRecorder;
 use crate::render_phase::TrackedRenderPass;
-use crate::render_resource::{CommandEncoder, RenderPassDescriptor};
 use crate::render_resource::wgpu_compat::CommandBuffer;
+use crate::render_resource::{CommandEncoder, RenderPassDescriptor};
 use bevy_derive::{Deref, DerefMut};
 use bevy_ecs::change_detection::Tick;
 use bevy_ecs::component::ComponentId;
@@ -235,9 +235,7 @@ fn warn_on_empty_pass(descriptor: &RenderPassDescriptor<'_>, reason: Option<Stri
     use core::sync::atomic::{AtomicBool, Ordering};
     static WARNED: AtomicBool = AtomicBool::new(false);
     let label = descriptor.label.unwrap_or("<unnamed>");
-    let reason = reason
-        .map(|r| format!(" ({r})"))
-        .unwrap_or_default();
+    let reason = reason.map(|r| format!(" ({r})")).unwrap_or_default();
     if !WARNED.swap(true, Ordering::Relaxed) {
         bevy_log::warn!(
             "render pass '{label}' could not begin on the diligent path{reason}; \

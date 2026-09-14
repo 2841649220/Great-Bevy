@@ -19,7 +19,6 @@ pub struct SdfGiSceneBuffers {
     /// `None` until the scene SDF is non-empty.
     pub sdf_samples: Option<Buffer>,
     /// Storage texture/read-write buffer for the irradiance cache (task 18.3).
-
     pub irradiance: Option<Buffer>,
     /// The grid metadata the shaders need (origin / size / cell size).
     pub grid_info: Option<Buffer>,
@@ -103,46 +102,40 @@ pub fn prepare_sdf_gi_resources(
     // 18.2: ray-march output buffers (one f32 per probe) + probe dims.
     let probe_count = (DEFAULT_PROBE_SIZE[0] as usize) * (DEFAULT_PROBE_SIZE[1] as usize);
     if buffers.ao_output.is_none() {
-        buffers.ao_output = Some(render_device.create_buffer(
-            &BufferDescriptor {
-                label: Some("sdf_gi_ao_output"),
-                size: (probe_count * 4) as u64,
-                usage: BufferUsages::STORAGE,
-                mapped_at_creation: false,
-            },
-        ));
-    }
+        buffers.ao_output = Some(render_device.create_buffer(&BufferDescriptor {
+            label: Some("sdf_gi_ao_output"),
+            size: (probe_count * 4) as u64,
+            usage: BufferUsages::STORAGE,
+            mapped_at_creation: false,
+        }));
+    };
     if buffers.shadow_output.is_none() {
-        buffers.shadow_output = Some(render_device.create_buffer(
-            &BufferDescriptor {
-                label: Some("sdf_gi_shadow_output"),
-                size: (probe_count * 4) as u64,
-                usage: BufferUsages::STORAGE,
-                mapped_at_creation: false,
-            },
-        ));
-    }
+        buffers.shadow_output = Some(render_device.create_buffer(&BufferDescriptor {
+            label: Some("sdf_gi_shadow_output"),
+            size: (probe_count * 4) as u64,
+            usage: BufferUsages::STORAGE,
+            mapped_at_creation: false,
+        }));
+    };
     if buffers.probe_size.is_none() {
         // xy = probe dims, z = reset flag (0), w unused. Shared by
         // `ray_march.wgsl` and `irradiance.wgsl`.
         let probe_info: [u32; 4] = [DEFAULT_PROBE_SIZE[0], DEFAULT_PROBE_SIZE[1], 0, 0];
-        buffers.probe_size = Some(render_device.create_buffer_with_data(
-            &BufferInitDescriptor {
+        buffers.probe_size = Some(
+            render_device.create_buffer_with_data(&BufferInitDescriptor {
                 label: Some("sdf_gi_probe_size"),
                 contents: bytemuck::cast_slice(&probe_info),
                 usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
-            },
-        ));
+            }),
+        );
     }
     // 18.3: irradiance cache (one vec4 per probe: RGB irradiance + alpha 1).
     if buffers.irradiance.is_none() {
-        buffers.irradiance = Some(render_device.create_buffer(
-            &BufferDescriptor {
-                label: Some("sdf_gi_irradiance"),
-                size: (probe_count * 16) as u64,
-                usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            },
-        ));
-    }
+        buffers.irradiance = Some(render_device.create_buffer(&BufferDescriptor {
+            label: Some("sdf_gi_irradiance"),
+            size: (probe_count * 16) as u64,
+            usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        }));
+    };
 }

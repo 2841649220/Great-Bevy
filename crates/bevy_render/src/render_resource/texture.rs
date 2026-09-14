@@ -73,8 +73,7 @@ impl Texture {
         let value = self.diligent_view(desc);
         let id = TextureViewId::new();
         if let Some(view) = &value {
-            crate::renderer::diligent_registry::registry()
-                .register_texture_view(id, view.as_raw());
+            crate::renderer::diligent_registry::registry().register_texture_view(id, view.as_raw());
         }
         TextureView {
             id,
@@ -136,7 +135,9 @@ impl Texture {
             wgpu_types::TextureViewDimension::D2Array => {
                 sys::_RESOURCE_DIMENSION::RESOURCE_DIM_TEX_2D_ARRAY
             }
-            wgpu_types::TextureViewDimension::Cube => sys::_RESOURCE_DIMENSION::RESOURCE_DIM_TEX_CUBE,
+            wgpu_types::TextureViewDimension::Cube => {
+                sys::_RESOURCE_DIMENSION::RESOURCE_DIM_TEX_CUBE
+            }
             wgpu_types::TextureViewDimension::CubeArray => {
                 sys::_RESOURCE_DIMENSION::RESOURCE_DIM_TEX_CUBE_ARRAY
             }
@@ -281,7 +282,10 @@ impl TextureView {
     }
 
     /// The Diligent texture view, when this instance has one.
-    #[expect(dead_code, reason = "consumed by the diligent readback paths (screenshots, gpu_readback)")]
+    #[expect(
+        dead_code,
+        reason = "consumed by the diligent readback paths (screenshots, gpu_readback)"
+    )]
     pub(crate) fn diligent(&self) -> Option<&diligent_rs::TextureView> {
         self.inner.value.as_deref()
     }
@@ -328,7 +332,10 @@ impl Sampler {
     }
 
     /// The Diligent sampler, when this instance has one.
-    #[expect(dead_code, reason = "consumed by the SRB binding path through the registry")]
+    #[expect(
+        dead_code,
+        reason = "consumed by the SRB binding path through the registry"
+    )]
     pub(crate) fn diligent(&self) -> Option<&diligent_rs::Sampler> {
         self.inner.value.as_deref()
     }

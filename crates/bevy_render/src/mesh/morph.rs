@@ -1,3 +1,4 @@
+use crate::render_resource::{TextureDescriptor, TextureViewDescriptor};
 use bevy_asset::AssetId;
 use bevy_ecs::{
     resource::Resource,
@@ -8,9 +9,8 @@ use bevy_mesh::{
     Mesh,
 };
 use bevy_platform::collections::HashMap;
-use crate::render_resource::{TextureDescriptor, TextureViewDescriptor};
-use wgpu_types::{Extent3d, TextureDimension, TextureFormat, TextureUsages};
 use wgpu_types::TextureDataOrder;
+use wgpu_types::{Extent3d, TextureDimension, TextureFormat, TextureUsages};
 
 use crate::{
     render_resource::{Buffer, Texture, TextureView},

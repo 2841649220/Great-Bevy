@@ -8,7 +8,9 @@
 use bevy::{
     app::AppExit,
     color::palettes::css,
-    diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin, SystemInformationDiagnosticsPlugin},
+    diagnostic::{
+        DiagnosticsStore, FrameTimeDiagnosticsPlugin, SystemInformationDiagnosticsPlugin,
+    },
     prelude::*,
 };
 
@@ -470,7 +472,11 @@ fn dispatch_3d_dxr_ray_tracing(
             let v = (y as f32 / grid_dim as f32) * 2.0 - 1.0;
             let target = camera_transform.transform_point(Vec3::new(u * 8.0, v * 5.0, -10.0));
             let primary_dir = (target - camera_pos).normalize();
-            let inv_dir = Vec3::new(1.0 / primary_dir.x, 1.0 / primary_dir.y, 1.0 / primary_dir.z);
+            let inv_dir = Vec3::new(
+                1.0 / primary_dir.x,
+                1.0 / primary_dir.y,
+                1.0 / primary_dir.z,
+            );
 
             state.primary_rays += 1;
 
@@ -486,17 +492,22 @@ fn dispatch_3d_dxr_ray_tracing(
             }
 
             if let Some((_dist, hit_obj, hit_point)) = closest_hit {
-                let hit_normal = (hit_point - hit_obj.cached_aabb.min.lerp(hit_obj.cached_aabb.max, 0.5)).normalize();
+                let hit_normal = (hit_point
+                    - hit_obj.cached_aabb.min.lerp(hit_obj.cached_aabb.max, 0.5))
+                .normalize();
 
                 for (_light, light_trans) in &light_sources {
                     state.shadow_rays += 1;
                     let shadow_dir = (light_trans.translation - hit_point).normalize();
-                    let shadow_inv = Vec3::new(1.0 / shadow_dir.x, 1.0 / shadow_dir.y, 1.0 / shadow_dir.z);
+                    let shadow_inv =
+                        Vec3::new(1.0 / shadow_dir.x, 1.0 / shadow_dir.y, 1.0 / shadow_dir.z);
 
                     for (occ, _) in &objects {
                         if !std::ptr::eq(*occ, hit_obj) {
                             state.bvh_checks += 1;
-                            let _ = occ.cached_aabb.intersect_ray(hit_point + hit_normal * 0.05, shadow_inv);
+                            let _ = occ
+                                .cached_aabb
+                                .intersect_ray(hit_point + hit_normal * 0.05, shadow_inv);
                         }
                     }
                 }
@@ -509,7 +520,9 @@ fn dispatch_3d_dxr_ray_tracing(
                     for (other, _) in &objects {
                         if !std::ptr::eq(*other, hit_obj) {
                             state.bvh_checks += 1;
-                            let _ = other.cached_aabb.intersect_ray(hit_point + hit_normal * 0.05, refl_inv);
+                            let _ = other
+                                .cached_aabb
+                                .intersect_ray(hit_point + hit_normal * 0.05, refl_inv);
                         }
                     }
                 }
@@ -551,7 +564,11 @@ fn spawn_3d_procedural_particles(
                 Mesh3d(p_mesh.clone()),
                 MeshMaterial3d(materials.add(StandardMaterial {
                     base_color: col,
-                    emissive: LinearRgba::rgb(col.to_srgba().red * 2.0, col.to_srgba().green * 2.0, col.to_srgba().blue * 2.0),
+                    emissive: LinearRgba::rgb(
+                        col.to_srgba().red * 2.0,
+                        col.to_srgba().green * 2.0,
+                        col.to_srgba().blue * 2.0,
+                    ),
                     ..default()
                 })),
                 Particle3d {
@@ -641,7 +658,11 @@ fn update_ui_hud(
             state.ao_rays,
             state.bvh_checks,
             state.total_particles,
-            if state.camera_orbit { "ACTIVE" } else { "LOCKED" },
+            if state.camera_orbit {
+                "ACTIVE"
+            } else {
+                "LOCKED"
+            },
         );
     }
 }
@@ -667,7 +688,11 @@ fn handle_input_controls(
         state.camera_orbit = !state.camera_orbit;
         println!(
             "[3D DEMO] Camera Orbit {}",
-            if state.camera_orbit { "ENABLED" } else { "DISABLED" }
+            if state.camera_orbit {
+                "ENABLED"
+            } else {
+                "DISABLED"
+            }
         );
     }
 }

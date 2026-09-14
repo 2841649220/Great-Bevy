@@ -47,6 +47,9 @@ pub(super) unsafe fn observer_system_runner<E: Event, B: Bundle, S: ObserverSyst
     let mut state = unsafe { observer_cell.get_mut::<Observer>().debug_checked_unwrap() };
 
     // TODO: Move this check into the observer cache to avoid dynamic dispatch
+    // `last_trigger_id` is never `0` while a trigger is running: `increment_trigger_id` reserves
+    // that value as the sentinel for observers that have not been triggered yet, so a wrapped
+    // counter can never make a fresh observer look like it has already run.
     let last_trigger = world.last_trigger_id();
     if state.last_trigger_id == last_trigger {
         return;
@@ -182,5 +185,36 @@ mod tests {
         fn system(_: On<TriggerEvent>, _world: &mut World) {}
         let mut world = World::default();
         world.add_observer(system);
+    }
+
+    #[test]
+    fn test_observer_trigger_id_wraparound() {
+        #[derive(Resource, Default)]
+        struct TriggerCount(u32);
+
+        fn observer_system(_: On<TriggerEvent>, mut count: ResMut<TriggerCount>) {
+            count.0 += 1;
+        };
+
+        let mut world = World::default();
+        world.init_resource::<TriggerCount>();
+
+        // Register a new observer, which initializes with last_trigger_id = 0
+        world.add_observer(observer_system);
+        Schedule::default().run(&mut world);
+
+        // Set last_trigger_id to u32::MAX so the next trigger wraps the counter around
+        world.last_trigger_id = u32::MAX;
+
+        // Trigger the event. The counter wraps to 1 (0 is reserved as the sentinel for observers
+        // that have not been triggered yet), so the newly registered observer must NOT be skipped.
+        world.trigger(TriggerEvent);
+
+        assert_ne!(
+            world.last_trigger_id(),
+            0,
+            "0 must stay reserved so fresh observers are never mistaken for already-triggered ones"
+        );
+        assert_eq!(world.resource::<TriggerCount>().0, 1);
     }
 }

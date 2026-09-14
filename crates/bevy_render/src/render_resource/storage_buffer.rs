@@ -1,6 +1,7 @@
 use core::marker::PhantomData;
 
 use super::Buffer;
+use crate::render_resource::{BindingResource, BufferBinding, BufferInitDescriptor};
 use crate::{
     render_resource::make_buffer_label,
     renderer::{RenderDevice, RenderQueue},
@@ -9,7 +10,6 @@ use encase::{
     internal::WriteInto, DynamicStorageBuffer as DynamicStorageBufferWrapper, ShaderType,
     StorageBuffer as StorageBufferWrapper,
 };
-use crate::render_resource::{BindingResource, BufferInitDescriptor, BufferBinding};
 use wgpu_types::{BufferSize, BufferUsages};
 
 use super::IntoBinding;

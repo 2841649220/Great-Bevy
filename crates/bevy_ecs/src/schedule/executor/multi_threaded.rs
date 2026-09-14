@@ -12,6 +12,8 @@ use std::sync::{Mutex, MutexGuard};
 #[cfg(feature = "trace")]
 use tracing::{info_span, Span};
 
+#[cfg(feature = "hotpatching")]
+use crate::{change_detection::Tick, prelude::DetectChanges, HotPatchChanges};
 use crate::{
     error::{ErrorContext, ErrorHandler, Result},
     prelude::Resource,
@@ -21,8 +23,6 @@ use crate::{
     system::{RunSystemError, ScheduleSystem},
     world::{unsafe_world_cell::UnsafeWorldCell, World},
 };
-#[cfg(feature = "hotpatching")]
-use crate::{prelude::DetectChanges, HotPatchChanges};
 
 use super::__rust_begin_short_backtrace;
 
@@ -32,6 +32,8 @@ struct Environment<'env, 'sys> {
     systems: &'sys [SyncUnsafeCell<SystemWithAccess>],
     conditions: SyncUnsafeCell<Conditions<'sys>>,
     world_cell: UnsafeWorldCell<'env>,
+    #[cfg(feature = "hotpatching")]
+    hotpatch_tick: core::sync::atomic::AtomicU32,
 }
 
 struct Conditions<'a> {
@@ -47,6 +49,13 @@ impl<'env, 'sys> Environment<'env, 'sys> {
         schedule: &'sys mut SystemSchedule,
         world: &'env mut World,
     ) -> Self {
+        #[cfg(feature = "hotpatching")]
+        let hotpatch_tick = core::sync::atomic::AtomicU32::new(
+            world
+                .get_resource_ref::<HotPatchChanges>()
+                .map(|r| r.last_changed().get())
+                .unwrap_or_default(),
+        );
         Environment {
             executor,
             systems: SyncUnsafeCell::from_mut(schedule.systems.as_mut_slice()).as_slice_of_cells(),
@@ -57,6 +66,8 @@ impl<'env, 'sys> Environment<'env, 'sys> {
                 systems_in_sets_with_conditions: &schedule.systems_in_sets_with_conditions,
             }),
             world_cell: world.as_unsafe_world_cell(),
+            #[cfg(feature = "hotpatching")]
+            hotpatch_tick,
         }
     }
 }
@@ -443,21 +454,12 @@ impl ExecutorState {
         }
 
         #[cfg(feature = "hotpatching")]
-        #[expect(
-            clippy::undocumented_unsafe_blocks,
-            reason = "This actually could result in UB if a system tries to mutate
-            `HotPatchChanges`. We allow this as the resource only exists with the `hotpatching` feature.
-            and `hotpatching` should never be enabled in release."
-        )]
-        #[cfg(feature = "hotpatching")]
-        let hotpatch_tick = unsafe {
+        let hotpatch_tick = Tick::new(
             context
                 .environment
-                .world_cell
-                .get_resource_ref::<HotPatchChanges>()
-        }
-        .map(|r| r.last_changed())
-        .unwrap_or_default();
+                .hotpatch_tick
+                .load(core::sync::atomic::Ordering::Acquire),
+        );
 
         // can't borrow since loop mutably borrows `self`
         let mut ready_systems = core::mem::take(&mut self.ready_systems_copy);

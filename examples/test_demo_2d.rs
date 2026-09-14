@@ -7,7 +7,9 @@
 use bevy::{
     app::AppExit,
     color::palettes::css,
-    diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin, SystemInformationDiagnosticsPlugin},
+    diagnostic::{
+        DiagnosticsStore, FrameTimeDiagnosticsPlugin, SystemInformationDiagnosticsPlugin,
+    },
     prelude::*,
 };
 
@@ -125,9 +127,7 @@ fn setup_2d_scene(
     // 恒星光晕外环
     commands.spawn((
         Mesh2d(meshes.add(Annulus::new(50.0, 62.0))),
-        MeshMaterial2d(materials.add(ColorMaterial::from_color(Color::srgba(
-            1.0, 0.6, 0.1, 0.4,
-        )))),
+        MeshMaterial2d(materials.add(ColorMaterial::from_color(Color::srgba(1.0, 0.6, 0.1, 0.4)))),
         Transform::from_xyz(0.0, 0.0, -0.5),
         ChildOf(core),
     ));
@@ -143,7 +143,9 @@ fn setup_2d_scene(
             angular_speed: 1.8,
             current_angle: 0.0,
         },
-        Spinner2d { angular_speed: -2.5 },
+        Spinner2d {
+            angular_speed: -2.5,
+        },
         Transform::from_xyz(120.0, 0.0, 1.0),
         ChildOf(core),
     ));
@@ -175,7 +177,9 @@ fn setup_2d_scene(
             angular_speed: -0.7,
             current_angle: std::f32::consts::PI,
         },
-        Spinner2d { angular_speed: -1.2 },
+        Spinner2d {
+            angular_speed: -1.2,
+        },
         Transform::from_xyz(-310.0, 0.0, 1.0),
         ChildOf(core),
     ));

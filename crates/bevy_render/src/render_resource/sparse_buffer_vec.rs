@@ -7,6 +7,7 @@ use core::{
     sync::atomic::{AtomicU64, Ordering},
 };
 
+use crate::render_resource::{BufferDescriptor, ComputePassDescriptor};
 use bevy_app::{App, Plugin};
 use bevy_asset::{embedded_asset, load_embedded_asset, Handle};
 use bevy_derive::{Deref, DerefMut};
@@ -28,7 +29,6 @@ use bevy_shader::Shader;
 use bytemuck::{Pod, Zeroable};
 use encase::ShaderType;
 use weak_table::WeakKeyHashMap;
-use crate::render_resource::{BufferDescriptor, ComputePassDescriptor};
 use wgpu_types::{BufferUsages, ShaderStages};
 
 use crate::{

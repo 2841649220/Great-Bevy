@@ -4,7 +4,10 @@
 //! A whitelist file encodes per-scene D3D12-tier relaxed thresholds plus
 //! documented per-frame expected differences. The verdict maps a `DiffStats`
 //! onto the whitelist and reports pass/fail per metric.
-#![expect(dead_code, reason = "schema metadata fields are retained for full JSON round-trip")]
+#![expect(
+    dead_code,
+    reason = "schema metadata fields are retained for full JSON round-trip"
+)]
 
 use serde::{Deserialize, Serialize};
 
@@ -137,9 +140,21 @@ pub fn judge(stats: &DiffStats, whitelist: &Whitelist, frame: &str) -> Whitelist
     // Global thresholds (skip None).
     let thresholds = [
         ("ssim", whitelist.thresholds.ssim, Some(metric_ssim(stats))),
-        ("psnr_db", whitelist.thresholds.psnr_db, Some(metric_psnr(stats))),
-        ("mean_abs_diff", whitelist.thresholds.mean_abs_diff, Some(stats.mean_abs_diff)),
-        ("max_abs_diff", whitelist.thresholds.max_abs_diff, Some(stats.max_abs_diff as f64)),
+        (
+            "psnr_db",
+            whitelist.thresholds.psnr_db,
+            Some(metric_psnr(stats)),
+        ),
+        (
+            "mean_abs_diff",
+            whitelist.thresholds.mean_abs_diff,
+            Some(stats.mean_abs_diff),
+        ),
+        (
+            "max_abs_diff",
+            whitelist.thresholds.max_abs_diff,
+            Some(stats.max_abs_diff as f64),
+        ),
         (
             "diff_histogram_p95",
             whitelist.thresholds.diff_histogram_p95,
@@ -269,7 +284,11 @@ mod tests {
         let stats = crate::metrics::compare_rgb(&a, &b, w, h).expect("valid");
         let verdict = judge(&stats, &sample_whitelist(), "0210");
         assert!(!verdict.passed);
-        let ssim = verdict.checks.iter().find(|c| c.metric == "ssim").expect("ssim check");
+        let ssim = verdict
+            .checks
+            .iter()
+            .find(|c| c.metric == "ssim")
+            .expect("ssim check");
         assert!(!ssim.passed);
     }
 
@@ -277,21 +296,27 @@ mod tests {
     fn per_frame_override_is_applied() {
         let mut whitelist = sample_whitelist();
         whitelist.thresholds.ssim = Some(0.99);
-        whitelist.categories[0].expected_differences.push(ExpectedDifference {
-            frame: "0210".to_string(),
-            metric: "ssim".to_string(),
-            observed: MetricValue::Number(0.985),
-            threshold: 0.98,
-            scope: None,
-            rationale: "rasterization edge rule difference on this frame".to_string(),
-        });
+        whitelist.categories[0]
+            .expected_differences
+            .push(ExpectedDifference {
+                frame: "0210".to_string(),
+                metric: "ssim".to_string(),
+                observed: MetricValue::Number(0.985),
+                threshold: 0.98,
+                scope: None,
+                rationale: "rasterization edge rule difference on this frame".to_string(),
+            });
         // ssim = 0.985 passes the per-frame override (0.98) but not the global (0.99).
         let w = 16u32;
         let h = 16u32;
         let data = vec![9u8; (w * h * 3) as usize];
         let stats = crate::metrics::compare_rgb(&data, &data, w, h).expect("valid");
         let verdict = judge(&stats, &whitelist, "0210");
-        let ssim = verdict.checks.iter().find(|c| c.metric == "ssim").expect("ssim check");
+        let ssim = verdict
+            .checks
+            .iter()
+            .find(|c| c.metric == "ssim")
+            .expect("ssim check");
         assert_eq!(ssim.threshold, 0.98, "per-frame override must win");
     }
 

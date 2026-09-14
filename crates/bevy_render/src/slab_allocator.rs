@@ -1,5 +1,6 @@
 //! A general-purpose allocator that manages a set of GPU buffer slabs.
 
+use crate::render_resource::{BufferDescriptor, BufferInitDescriptor, CommandEncoderDescriptor};
 use alloc::borrow::Cow;
 use bevy_derive::{Deref, DerefMut};
 use bevy_log::error;
@@ -13,7 +14,6 @@ use core::{
 };
 use nonmax::NonMaxU32;
 use offset_allocator::{Allocation, Allocator};
-use crate::render_resource::{BufferDescriptor, BufferInitDescriptor, CommandEncoderDescriptor};
 use wgpu_types::{BufferSize, BufferUsages, WriteOnly};
 
 use crate::{

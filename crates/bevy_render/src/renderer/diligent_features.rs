@@ -236,7 +236,7 @@ fn d3d12_feature_bits(
 }
 
 /// The wgpu [`Features`] bitmask expressed from Diligent device/adapter
-/// capability queries (plan §5.3.7 "自研 `DiligentFeatures`").
+/// capability queries (plan §5.3.7, the in-house `DiligentFeatures`).
 ///
 /// The `WgpuFeatures` alias and every variant name are preserved for
 /// consumers; this type is the diligent-backed expression layer that
@@ -387,7 +387,11 @@ pub(crate) fn adreno_model_from_name(name: &str) -> Option<u32> {
     // `is_none_or`) instead of passing it like upstream `None` does.
     let mut digits = rest.chars();
     let first = digits.next()?.to_digit(10)?;
-    Some(digits.map_while(|c| c.to_digit(10)).fold(first, |acc, digit| acc * 10 + digit))
+    Some(
+        digits
+            .map_while(|c| c.to_digit(10))
+            .fold(first, |acc, digit| acc * 10 + digit),
+    )
 }
 
 #[cfg(test)]
@@ -399,6 +403,11 @@ mod tests {
         sys::_DEVICE_FEATURE_STATE::DEVICE_FEATURE_STATE_ENABLED as sys::DEVICE_FEATURE_STATE;
 
     fn d3d12_device_info(shader_major: u32, shader_minor: u32) -> sys::RenderDeviceInfo {
+        // SAFETY: `RenderDeviceInfo` is a plain-old-data FFI aggregate (a device-type
+        // enum, inline version/NDC structs, a `DeviceFeatures` bag of feature-state
+        // enums and a shader-version struct - no pointers), so all-zero is at
+        // valid "unknown device, everything disabled" value; the fields these
+        // tests assert on are assigned right below.
         let mut info: sys::RenderDeviceInfo = unsafe { std::mem::zeroed() };
         info.Type = sys::RENDER_DEVICE_TYPE::RENDER_DEVICE_TYPE_D3D12;
         info.MaxShaderVersion.HLSL = sys::Version {
@@ -409,6 +418,11 @@ mod tests {
     }
 
     fn adapter_info() -> sys::GraphicsAdapterInfo {
+        // SAFETY: `GraphicsAdapterInfo` is a plain-old-data FFI aggregate (at
+        // fixed-size `Char` description array, integer/enum fields and inline
+        // property structs - none of them contain pointers), so all-zero is at
+        // valid "no adapter properties" base that the mocks below overwrite
+        // field by field.
         unsafe { std::mem::zeroed() }
     }
 
@@ -447,8 +461,8 @@ mod tests {
     #[test]
     fn d3d12_target_profile_sets_every_consumer_gate_feature() {
         let (device, adapter) = rtx3050ti_mock();
-        let features = DiligentFeatures::derive_from_info(&device, &adapter)
-            .expect("D3D12 must derive");
+        let features =
+            DiligentFeatures::derive_from_info(&device, &adapter).expect("D3D12 must derive");
         let mask = features.as_features();
 
         // IMMEDIATES: wireframe.rs:128 / meshlet/mod.rs:126 /
@@ -503,8 +517,8 @@ mod tests {
     fn immediates_is_always_set_on_d3d12() {
         let device = d3d12_device_info(6, 6);
         let adapter = adapter_info();
-        let features = DiligentFeatures::derive_from_info(&device, &adapter)
-            .expect("D3D12 must derive");
+        let features =
+            DiligentFeatures::derive_from_info(&device, &adapter).expect("D3D12 must derive");
         assert!(features.contains(Features::IMMEDIATES));
         // Nothing feature-driven is claimed without the queries though:
         // binding arrays require BindlessResources.
@@ -595,7 +609,10 @@ mod tests {
         // `WgpuSettings::disabled_features`) clears the bit: the
         // light_probe/mod.rs:795 gate must see it absent.
         let disabled = Features::TEXTURE_BINDING_ARRAY;
-        assert!(derived.contains(disabled), "precondition: derived mask has the bit");
+        assert!(
+            derived.contains(disabled),
+            "precondition: derived mask has the bit"
+        );
         let mask = caps
             .intersect_settings_features(derived & !disabled)
             .features()

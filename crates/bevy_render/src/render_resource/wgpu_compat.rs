@@ -76,7 +76,8 @@ pub type TexelCopyBufferInfo<'a> = wgpu_types::TexelCopyBufferInfo<&'a Buffer>;
 
 /// The wgpu `TexelCopyTextureInfo` alias shape: the texture handle the info
 /// references is bevy's [`Texture`].
-pub type TexelCopyTextureInfo<'a> = wgpu_types::TexelCopyTextureInfo<&'a crate::render_resource::Texture>;
+pub type TexelCopyTextureInfo<'a> =
+    wgpu_types::TexelCopyTextureInfo<&'a crate::render_resource::Texture>;
 
 // ---------------------------------------------------------------------------
 // Buffer mapping
@@ -401,7 +402,10 @@ impl CommandEncoder {
         let pending_maps = core::mem::take(&mut self.pending_maps);
         for pending in pending_maps {
             let result = self.run_pending_map(&pending);
-            let callback = pending.callback.into_inner().unwrap_or_else(|e| e.into_inner());
+            let callback = pending
+                .callback
+                .into_inner()
+                .unwrap_or_else(|e| e.into_inner());
             callback(result);
         }
         CommandBuffer { _private: () }
@@ -713,12 +717,8 @@ impl RenderPass<'_> {
     }
 
     /// Sets the active bind group for a given bind group index.
-    pub fn set_bind_group<'a, BG>(
-        &mut self,
-        index: u32,
-        bind_group: BG,
-        dynamic_offsets: &[u32],
-    ) where
+    pub fn set_bind_group<'a, BG>(&mut self, index: u32, bind_group: BG, dynamic_offsets: &[u32])
+    where
         Option<&'a WgpuBindGroup>: From<BG>,
     {
         let Some(bind_group) = bind_group.into() else {
@@ -770,7 +770,11 @@ impl RenderPass<'_> {
     }
 
     /// Assign a vertex buffer to a slot.
-    pub fn set_vertex_buffer<'a>(&mut self, slot_index: u32, buffer_slice: impl Into<BufferSlice<'a>>) {
+    pub fn set_vertex_buffer<'a>(
+        &mut self,
+        slot_index: u32,
+        buffer_slice: impl Into<BufferSlice<'a>>,
+    ) {
         let buffer_slice = buffer_slice.into();
         let Some(context) = self.context() else {
             return;
@@ -913,15 +917,16 @@ impl RenderPass<'_> {
         let Some(context) = self.context() else {
             return;
         };
-        let Some(buffer) = crate::renderer::diligent_registry::registry()
-            .resolve_buffer(indirect_buffer.id())
+        let Some(buffer) =
+            crate::renderer::diligent_registry::registry().resolve_buffer(indirect_buffer.id())
         else {
             self.poison("no diligent indirect buffer");
             return;
         };
         let (counter, counter_offset, counter_mode) = match count {
             Some((count_buffer, count_offset)) => {
-                match crate::renderer::diligent_registry::registry().resolve_buffer(count_buffer.id())
+                match crate::renderer::diligent_registry::registry()
+                    .resolve_buffer(count_buffer.id())
                 {
                     Some(counter) => (counter, count_offset, transition_mode()),
                     None => {
@@ -959,15 +964,16 @@ impl RenderPass<'_> {
         let Some(context) = self.context() else {
             return;
         };
-        let Some(buffer) = crate::renderer::diligent_registry::registry()
-            .resolve_buffer(indirect_buffer.id())
+        let Some(buffer) =
+            crate::renderer::diligent_registry::registry().resolve_buffer(indirect_buffer.id())
         else {
             self.poison("no diligent indirect buffer");
             return;
         };
         let (counter, counter_offset, counter_mode) = match count {
             Some((count_buffer, count_offset)) => {
-                match crate::renderer::diligent_registry::registry().resolve_buffer(count_buffer.id())
+                match crate::renderer::diligent_registry::registry()
+                    .resolve_buffer(count_buffer.id())
                 {
                     Some(counter) => (counter, count_offset, transition_mode()),
                     None => {
@@ -1166,6 +1172,22 @@ impl RenderPass<'_> {
     pub fn end_pipeline_statistics_query(&mut self) {}
 }
 
+impl ComputePass<'_> {
+    /// Starts a new debug group.
+    pub fn push_debug_group(&mut self, label: &str) {
+        if let Some(context) = self.context() {
+            crate::renderer::diligent_draw::begin_debug_group(context, label);
+        }
+    }
+
+    /// Ends the current debug group.
+    pub fn pop_debug_group(&mut self) {
+        if let Some(context) = self.context() {
+            crate::renderer::diligent_draw::end_debug_group(context);
+        }
+    }
+}
+
 impl Drop for RenderPass<'_> {
     fn drop(&mut self) {
         if self.began {
@@ -1225,12 +1247,8 @@ impl ComputePass<'_> {
     }
 
     /// Sets the active bind group for a given bind group index.
-    pub fn set_bind_group<'a, BG>(
-        &mut self,
-        index: u32,
-        bind_group: BG,
-        dynamic_offsets: &[u32],
-    ) where
+    pub fn set_bind_group<'a, BG>(&mut self, index: u32, bind_group: BG, dynamic_offsets: &[u32])
+    where
         Option<&'a WgpuBindGroup>: From<BG>,
     {
         let Some(bind_group) = bind_group.into() else {
@@ -1312,19 +1330,15 @@ impl ComputePass<'_> {
     /// indirect dispatches are not expressible - the meshlet pattern writes
     /// the count into the args buffer itself (atomic counter as the first
     /// arg field, `fill_counts.wgsl`).
-    pub fn dispatch_workgroups_indirect(
-        &mut self,
-        indirect_buffer: &Buffer,
-        indirect_offset: u64,
-    ) {
+    pub fn dispatch_workgroups_indirect(&mut self, indirect_buffer: &Buffer, indirect_offset: u64) {
         if self.poisoned {
             return;
         }
         let Some(context) = self.context() else {
             return;
         };
-        let Some(buffer) = crate::renderer::diligent_registry::registry()
-            .resolve_buffer(indirect_buffer.id())
+        let Some(buffer) =
+            crate::renderer::diligent_registry::registry().resolve_buffer(indirect_buffer.id())
         else {
             bevy_log::debug!(
                 "diligent: no diligent indirect buffer for dispatch (unregistered buffer)"
@@ -1730,7 +1744,10 @@ impl Tlas {
     }
 
     /// Mutable access to a range of the instances.
-    pub fn get_mut_slice(&mut self, range: core::ops::Range<usize>) -> Option<&mut [Option<TlasInstance>]> {
+    pub fn get_mut_slice(
+        &mut self,
+        range: core::ops::Range<usize>,
+    ) -> Option<&mut [Option<TlasInstance>]> {
         self.instances.get_mut(range)
     }
 
@@ -1786,7 +1803,7 @@ impl Device {
 
     /// Creates a top level acceleration structure (no-op handle).
     pub fn create_tlas(&self, desc: &CreateTlasDescriptor<'_>) -> Tlas {
-Tlas::new(desc.max_instances)
+        Tlas::new(desc.max_instances)
     }
 }
 

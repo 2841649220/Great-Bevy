@@ -329,4 +329,3 @@ pub struct DlssSuperResolutionSupported;
 /// absent. (Placeholder: never inserted until task 16.2 lands.)
 #[derive(Resource, Clone, Copy)]
 pub struct DlssRayReconstructionSupported;
-

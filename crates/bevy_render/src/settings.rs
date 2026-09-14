@@ -9,8 +9,8 @@ use bevy_ecs::world::World;
 use bevy_image::{CompressedImageFormatSupport, CompressedImageFormats};
 use bevy_window::RawHandleWrapperHolder;
 
-use wgpu_types::MemoryBudgetThresholds;
 pub use crate::renderer::diligent_features::DiligentFeatures;
+use wgpu_types::MemoryBudgetThresholds;
 pub use wgpu_types::{
     Backends, Dx12Compiler, Features as WgpuFeatures, Gles3MinorVersion, InstanceFlags,
     Limits as WgpuLimits, MemoryHints, PowerPreference,
@@ -96,18 +96,17 @@ impl Default for WgpuSettings {
             limits
         };
 
-        let dx12_shader_compiler =
-            Dx12Compiler::from_env().unwrap_or_else(|| {
-                let dxc = "dxcompiler.dll";
+        let dx12_shader_compiler = Dx12Compiler::from_env().unwrap_or_else(|| {
+            let dxc = "dxcompiler.dll";
 
-                if cfg!(target_os = "windows") && std::fs::metadata(dxc).is_ok() {
-                    Dx12Compiler::DynamicDxc {
-                        dxc_path: String::from(dxc),
-                    }
-                } else {
-                    Dx12Compiler::Fxc
+            if cfg!(target_os = "windows") && std::fs::metadata(dxc).is_ok() {
+                Dx12Compiler::DynamicDxc {
+                    dxc_path: String::from(dxc),
                 }
-            });
+            } else {
+                Dx12Compiler::Fxc
+            }
+        });
 
         let gles3_minor_version = Gles3MinorVersion::from_env().unwrap_or_default();
 
@@ -195,7 +194,11 @@ impl RenderResources {
 /// An enum describing how the renderer will initialize resources. This is used when creating the [`RenderPlugin`](crate::RenderPlugin).
 pub enum RenderCreation {
     /// Allows renderer resource initialization to happen outside of the rendering plugin.
-    Manual(RenderResources),
+    ///
+    /// The resources are boxed to keep this variant (and therefore the enum) small:
+    /// [`RenderResources`] holds five resource handles, which is much larger than the
+    /// [`RenderCreation::Automatic`] variant.
+    Manual(Box<RenderResources>),
     /// Lets the rendering plugin create resources itself.
     Automatic(Box<WgpuSettings>),
 }
@@ -225,7 +228,7 @@ impl RenderCreation {
     ) -> bool {
         match self {
             RenderCreation::Manual(resources) => {
-                *future_resources.lock().unwrap() = Some(resources.clone());
+                *future_resources.lock().unwrap() = Some((**resources).clone());
             }
             RenderCreation::Automatic(render_creation) => {
                 let Some(backends) = render_creation.backends else {
@@ -248,7 +251,7 @@ impl RenderCreation {
 
 impl From<RenderResources> for RenderCreation {
     fn from(value: RenderResources) -> Self {
-        Self::Manual(value)
+        Self::Manual(Box::new(value))
     }
 }
 

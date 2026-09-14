@@ -2,7 +2,7 @@
 
 <div align="center">
 
-[![Rust](https://img.shields.io/badge/rust-1.85%2B-orange.svg)](https://www.rust-lang.org)
+[![Rust](https://img.shields.io/badge/rust-1.95%2B-orange.svg)](https://www.rust-lang.org)
 [![Edition](https://img.shields.io/badge/edition-2024-blue.svg)](https://doc.rust-lang.org/edition-guide/rust-2024/index.html)
 [![Graphics](https://img.shields.io/badge/DirectX-12%20Ultimate%20(DX12U)-0078D7.svg)](https://developer.microsoft.com/en-us/windows/hardware/)
 [![RayTracing](https://img.shields.io/badge/Ray%20Tracing-DXR%201.1%20%7C%20Solari-green.svg)](https://microsoft.github.io/DirectX-Specs/d3d/Raytracing.html)
@@ -96,7 +96,7 @@
 ## 🚀 快速启动与运行
 
 ### 1. 环境准备 (Windows MSVC)
-- **Rust Toolchain**: 1.85.0 或更新版本（推荐使用 stable-x86_64-pc-windows-msvc）
+- **Rust Toolchain**: 1.95.0 或更新版本（推荐使用 stable-x86_64-pc-windows-msvc）
 - **CMake**: >= 3.20（已加入系统 PATH）
 - **Ninja**: （推荐用于并行极速编译，已加入 PATH）
 - **C/C++ 编译器**: Visual Studio 2022 (MSVC v143) 带 C++ 桌面开发工作负载
@@ -154,6 +154,7 @@ cargo run --example test_demo
 - 💡 [**特性白皮书与技术矩阵** (`docs/FEATURES.md`)](docs/FEATURES.md)：DirectX 12 Ultimate 4 大核心支柱、Solari 光追与 AI 超分辨率技术细节。
 - 🎯 [**演示 Showcase 运行指南** (`docs/DEMOS.md`)](docs/DEMOS.md)：2D / 3D 演示功能、参数调节与交互控制手册。
 - 🤝 [**贡献与代码规范指南** (`docs/CONTRIBUTING.md`)](docs/CONTRIBUTING.md)：代码风格规范、格式化校验（rustfmt/clippy）与提交规范。
+- 🔍 [**审查与修复档案** (`docs/audit/`)](docs/audit/README.md)：多轮健康体检的问题清单、修复证据、已知限制与事故记录（含历史报告归档）。
 
 ---
 

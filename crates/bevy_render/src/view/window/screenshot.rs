@@ -3,15 +3,10 @@ use crate::{
     render_asset::RenderAssets,
     render_phase::TrackedRenderPass,
     render_resource::{
-        BindGroup, BindGroupEntries, CachedRenderPipelineId, PipelineCache,
-        RenderPipeline, SpecializedRenderPipeline, SpecializedRenderPipelines, Texture,
-        TextureUsages, TextureView,
+        BindGroup, BindGroupEntries, CachedRenderPipelineId, PipelineCache, RenderPipeline,
+        SpecializedRenderPipeline, SpecializedRenderPipelines, Texture, TextureUsages, TextureView,
     },
-    renderer::{
-        diligent_draw,
-        diligent_registry::DiligentHandle,
-        RenderDevice,
-    },
+    renderer::{diligent_draw, diligent_registry::DiligentHandle, RenderDevice},
     texture::{GpuImage, ManualTextureViews, OutputColorAttachment},
     view::{prepare_view_attachments, prepare_view_targets, ViewTargetAttachments, WindowSurfaces},
     ExtractSchedule, GpuResourceAppExt, MainWorld, Render, RenderApp, RenderStartup, RenderSystems,
@@ -28,9 +23,7 @@ use bevy_image::{Image, TextureFormatPixelInfo, ToExtents};
 use bevy_log::{debug, error, info, warn};
 use bevy_material::{
     bind_group_layout_entries::{binding_types::texture_2d, BindGroupLayoutEntries},
-    descriptor::{
-        BindGroupLayoutDescriptor, FragmentState, RenderPipelineDescriptor, VertexState,
-    },
+    descriptor::{BindGroupLayoutDescriptor, FragmentState, RenderPipelineDescriptor, VertexState},
 };
 use bevy_platform::collections::HashSet;
 use bevy_reflect::Reflect;
@@ -124,17 +117,17 @@ struct ScreenshotPreparedState {
     pub bind_group: BindGroup,
     pub pipeline_id: CachedRenderPipelineId,
     pub size: Extent3d,
-    /// The fence value of the pending copy (0 = no copy in flight). The
-    /// cross-frame readback pattern (方案 A): the copy is re-issued and
+    /// The fence value of the pending copy (0 = no copy in flight). With the
+    /// cross-frame readback strategy (approach A) the copy is re-issued and
     /// re-signaled every frame until the fence reports the value completed;
     /// after `SYNC_FALLBACK_FRAMES` pending frames the wait becomes
-    /// blocking (方案 C).
+    /// blocking (approach C).
     pending_fence_value: u64,
     pending_frames: u32,
 }
 
 /// The cross-frame readback fence shared by all prepared screenshots
-/// (M1-4b-1 方案 A): every per-frame copy signals the fence with a
+/// (M1-4b-1 approach A): every per-frame copy signals the fence with at
 /// monotonically increasing value, and `collect_screenshots` polls
 /// `get_completed_value`.
 #[derive(Resource, Default)]
@@ -144,7 +137,7 @@ struct ScreenshotReadbackFence {
 }
 
 /// Pending frames before the readback falls back to a blocking fence wait
-/// (方案 C).
+/// (approach C).
 const SYNC_FALLBACK_FRAMES: u32 = 8;
 
 #[derive(Resource, Deref, DerefMut)]
@@ -418,7 +411,12 @@ fn prepare_screenshot_state(
                 return None;
             }
         };
-        match device.create_staging_texture("bevy_screenshot_staging", size.width, size.height, format) {
+        match device.create_staging_texture(
+            "bevy_screenshot_staging",
+            size.width,
+            size.height,
+            format,
+        ) {
             Ok(staging) => Some(DiligentHandle::new(Arc::new(staging))),
             Err(err) => {
                 warn!("diligent: screenshot staging texture creation failed: {err}");
@@ -543,15 +541,12 @@ impl SpecializedRenderPipeline for ScreenshotToScreenPipeline {
 /// Submits the per-frame screenshot commands on the Diligent immediate
 /// context (M1-4b-1): the capture-target -> staging copy plus the
 /// "screenshot to screen" blit into the target view, and a fence signal for
-/// the cross-frame readback (方案 A).
+/// the cross-frame readback (approach A).
 ///
 /// Called by `renderer::render_system` after the render schedule and before
 /// the context flush, so the copies and the blit are recorded after the
 /// scene's upscaling pass (same command list, correct ordering).
-pub(crate) fn submit_screenshot_commands(
-    world: &mut World,
-    context: &diligent_rs::DeviceContext,
-) {
+pub(crate) fn submit_screenshot_commands(world: &mut World, context: &diligent_rs::DeviceContext) {
     // Phase 1: resolve the per-entity capture views and their blit
     // pipelines (immutable world reads only - the borrows must end before
     // `prepared` is borrowed mutably below).
@@ -692,9 +687,10 @@ fn render_screenshot(
     // M1-4b-1: capture-target -> staging texture copy (the readback side;
     // the fence signal is guarded on this result by the caller).
     let mut copy_issued = false;
-    if let (Some(staging), Some(capture)) =
-        (prepared_state.staging.as_deref(), prepared_state.texture.diligent())
-    {
+    if let (Some(staging), Some(capture)) = (
+        prepared_state.staging.as_deref(),
+        prepared_state.texture.diligent(),
+    ) {
         // M1-4b-2 review, fix 1: `CopyTexture` is an immediate-context
         // call - serialize it (scoped: the blit path below takes its own
         // guards via the render-pass helpers).
@@ -747,7 +743,7 @@ fn render_screenshot(
 }
 
 /// Polls the readback fence and maps the completed staging textures
-/// (方案 A; blocking fence wait after `SYNC_FALLBACK_FRAMES` - 方案 C).
+/// (approach A; blocking fence wait after `SYNC_FALLBACK_FRAMES` - approach C).
 /// Called by `renderer::render_system` after present.
 pub(crate) fn collect_screenshots(world: &mut World) {
     #[cfg(feature = "trace")]
@@ -784,7 +780,7 @@ pub(crate) fn collect_screenshots(world: &mut World) {
         let ready = if completed >= state.pending_fence_value {
             true
         } else if state.pending_frames >= SYNC_FALLBACK_FRAMES {
-            // 方案 C: blocking wait for the copy.
+            // Approach C: blocking wait for the copy.
             fence_handle.wait(state.pending_fence_value).is_ok()
         } else {
             false
@@ -832,6 +828,10 @@ pub(crate) fn collect_screenshots(world: &mut World) {
         // across frames); the padded-row strip runs in the async task.
         let mut result = Vec::with_capacity(stride * height as usize);
         for row in 0..height {
+            // SAFETY: `mapped` is a live subresource mapping (dropped right after
+            // this loop) and `MappedTextureSubresource::row` yields a pointer to at
+            // full `stride`-byte row of it, so the slice is in bounds and is copied
+            // out before the mapping is released.
             result.extend_from_slice(unsafe {
                 core::slice::from_raw_parts(mapped.row(row as usize), stride)
             });
@@ -847,10 +847,7 @@ pub(crate) fn collect_screenshots(world: &mut World) {
                 let mut take_offset = buffered_row_bytes;
                 let mut place_offset = initial_row_bytes;
                 for _ in 1..height {
-                    result.copy_within(
-                        take_offset..take_offset + buffered_row_bytes,
-                        place_offset,
-                    );
+                    result.copy_within(take_offset..take_offset + buffered_row_bytes, place_offset);
                     take_offset += buffered_row_bytes;
                     place_offset += initial_row_bytes;
                 }

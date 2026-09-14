@@ -1,5 +1,6 @@
 //! Batching functionality when GPU preprocessing isn't in use.
 
+use crate::render_resource::BindingResource;
 use bevy_derive::{Deref, DerefMut};
 use bevy_ecs::entity::Entity;
 use bevy_ecs::resource::Resource;
@@ -7,7 +8,6 @@ use bevy_ecs::system::{Res, ResMut, StaticSystemParam};
 use bevy_ecs::world::{FromWorld, World};
 use bevy_log::error;
 use smallvec::{smallvec, SmallVec};
-use crate::render_resource::BindingResource;
 use wgpu_types::Limits;
 
 use crate::{

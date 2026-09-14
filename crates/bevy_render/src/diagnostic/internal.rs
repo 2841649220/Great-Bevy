@@ -1,7 +1,5 @@
 use alloc::{borrow::Cow, sync::Arc};
-use core::{
-    ops::{DerefMut, Range},
-};
+use core::ops::{DerefMut, Range};
 use std::thread::{self, ThreadId};
 
 use bevy_diagnostic::{Diagnostic, DiagnosticMeasurement, DiagnosticPath, DiagnosticsStore};
@@ -10,10 +8,10 @@ use bevy_ecs::system::{Res, ResMut};
 use bevy_platform::time::Instant;
 use std::sync::Mutex;
 
+use crate::render_resource::wgpu_compat::{QuerySet, RenderPass};
 use crate::render_resource::{
     Buffer, BufferDescriptor, BufferSlice, CommandEncoder, ComputePass, MapMode,
 };
-use crate::render_resource::wgpu_compat::{QuerySet, RenderPass};
 use crate::renderer::{RenderAdapterInfo, RenderDevice, RenderQueue, WgpuWrapper};
 use wgpu_types::{BufferSize, BufferUsages, Features};
 
@@ -205,10 +203,7 @@ struct FrameData {
 }
 
 impl FrameData {
-    fn new(
-        device: &RenderDevice,
-        _features: Features,
-) -> FrameData {
+    fn new(device: &RenderDevice, _features: Features) -> FrameData {
         // M1-4b-2: the diligent path has no timestamp/statistics query
         // support - the query sets and their buffers are never created and
         // the GPU-time diagnostics are skipped (CPU timings and value
@@ -276,10 +271,7 @@ impl FrameData {
         Some(index)
     }
 
-    fn open_span(
-        &mut self,
-        name: Cow<'static, str>,
-    ) -> &mut SpanRecord {
+    fn open_span(&mut self, name: Cow<'static, str>) -> &mut SpanRecord {
         let thread_id = thread::current().id();
 
         let parent = self.open_spans.iter().rfind(|v| v.thread_id == thread_id);

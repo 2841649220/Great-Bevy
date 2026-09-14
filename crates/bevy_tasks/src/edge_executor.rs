@@ -93,7 +93,8 @@ impl<'a, const C: usize> Executor<'a, C> {
         F: Future + Send + 'a,
         F::Output: Send + 'a,
     {
-        // SAFETY: Original implementation missing safety documentation
+        // SAFETY: `fut` and its output are bounded by `'a` and `Send`. The spawned task is scheduled
+        // onto this executor whose lifetime is `'a`, ensuring the future does not outlive its captured references.
         unsafe { self.spawn_unchecked(fut) }
     }
 
@@ -164,7 +165,8 @@ impl<'a, const C: usize> Executor<'a, C> {
     where
         F: Future + Send + 'a,
     {
-        // SAFETY: Original implementation missing safety documentation
+        // SAFETY: `fut` is bounded by `'a` and `Send`. It is polled to completion on the current thread
+        // while driving the executor's task queue, guaranteeing it does not outlive `'a`.
         unsafe { self.run_unchecked(fut).await }
     }
 
@@ -201,7 +203,7 @@ impl<'a, const C: usize> Executor<'a, C> {
             target_has_atomic = "ptr"
         ))]
         {
-            runnable = self.state().queue.pop();
+            runnable = self.state().queue.pop().or_else(|| self.state().overflow.pop());
         }
 
         #[cfg(not(all(
@@ -220,7 +222,9 @@ impl<'a, const C: usize> Executor<'a, C> {
 
     /// # Safety
     ///
-    /// Original implementation missing safety documentation
+    /// The caller must ensure that `fut` (and any data it references) remains valid for the
+    /// entire duration of task execution until the returned [`Task`] completes, and that `fut
+    /// is safe to send across threads if this executor is polled by multiple threads.
     unsafe fn spawn_unchecked<F>(&self, fut: F) -> Task<F::Output>
     where
         F: Future,
@@ -237,7 +241,9 @@ impl<'a, const C: usize> Executor<'a, C> {
                     target_has_atomic = "ptr"
                 ))]
                 {
-                    state.queue.push(runnable).unwrap();
+                    if let Err(runnable) = state.queue.push(runnable) {
+                        state.overflow.push(runnable);
+                    }
                 }
 
                 #[cfg(not(all(
@@ -257,7 +263,9 @@ impl<'a, const C: usize> Executor<'a, C> {
             }
         };
 
-        // SAFETY: Original implementation missing safety documentation
+        // SAFETY: The `schedule` closure retains a cloned `Arc<State<C>>`, ensuring the queue outlives
+        // the task. The caller of `spawn_unchecked` guarantees that `fut`'s lifetime and data validity
+        // are soundly maintained for the lifetime of the resulting runnable task.
         let (runnable, task) = unsafe { async_task::spawn_unchecked(fut, schedule) };
 
         runnable.schedule();
@@ -267,7 +275,8 @@ impl<'a, const C: usize> Executor<'a, C> {
 
     /// # Safety
     ///
-    /// Original implementation missing safety documentation
+    /// The caller must ensure that `fut` is safe to poll concurrently with tasks on this executor
+    /// and that any borrowed data in `fut` remains valid for the duration of this call.
     async unsafe fn run_unchecked<F>(&self, fut: F) -> F::Output
     where
         F: Future,
@@ -293,9 +302,11 @@ impl<'a, const C: usize> Default for Executor<'a, C> {
     }
 }
 
-// SAFETY: Original implementation missing safety documentation
+// SAFETY: `Executor` contains only an `Arc<State<C>>` and `PhantomData`. The inner `State` uses
+// thread-safe atomic primitives or mutex-synchronized queues, ensuring sound cross-thread transfer.
 unsafe impl<'a, const C: usize> Send for Executor<'a, C> {}
-// SAFETY: Original implementation missing safety documentation
+// SAFETY: All methods on `Executor` operate through shared references (`&self`) and perform
+// internal synchronization via atomic operations or mutexes within `State`.
 unsafe impl<'a, const C: usize> Sync for Executor<'a, C> {}
 
 /// A thread-local executor.
@@ -357,7 +368,10 @@ impl<'a, const C: usize> LocalExecutor<'a, C> {
         F: Future + 'a,
         F::Output: 'a,
     {
-        // SAFETY: Original implementation missing safety documentation
+        // SAFETY: `fut` and its output are bounded by the executor's lifetime `'a`. The caller
+        // cannot spawn futures that outlive `'a`. `LocalExecutor` is `!Send` and `!Sync` due to
+        // `PhantomData<Rc<()>>`, ensuring all tasks are polled and dropped strictly on the current thread
+        // before `'a` expires.
         unsafe { self.executor.spawn_unchecked(fut) }
     }
 
@@ -422,7 +436,9 @@ impl<'a, const C: usize> LocalExecutor<'a, C> {
     where
         F: Future,
     {
-        // SAFETY: Original implementation missing safety documentation
+        // SAFETY: Any background tasks spawned on `self` are already bounded by `'a` through the safe
+        // `LocalExecutor::spawn` interface. `fut` is driven to completion in this call on the current
+        // thread, so no scheduled tasks can outlive `'a`.
         unsafe { self.executor.run_unchecked(fut) }.await
     }
 }
@@ -442,6 +458,14 @@ struct State<const C: usize> {
         target_has_atomic = "ptr"
     ))]
     queue: crossbeam_queue::ArrayQueue<Runnable>,
+    #[cfg(all(
+        target_has_atomic = "8",
+        target_has_atomic = "16",
+        target_has_atomic = "32",
+        target_has_atomic = "64",
+        target_has_atomic = "ptr"
+    ))]
+    overflow: crossbeam_queue::SegQueue<Runnable>,
     #[cfg(not(all(
         target_has_atomic = "8",
         target_has_atomic = "16",
@@ -464,6 +488,14 @@ impl<const C: usize> State<C> {
                 target_has_atomic = "ptr"
             ))]
             queue: crossbeam_queue::ArrayQueue::new(C),
+            #[cfg(all(
+                target_has_atomic = "8",
+                target_has_atomic = "16",
+                target_has_atomic = "32",
+                target_has_atomic = "64",
+                target_has_atomic = "ptr"
+            ))]
+            overflow: crossbeam_queue::SegQueue::new(),
             #[cfg(not(all(
                 target_has_atomic = "8",
                 target_has_atomic = "16",
@@ -482,9 +514,9 @@ impl<const C: usize> State<C> {
 mod different_executor_tests {
     use core::cell::Cell;
 
-    use bevy_tasks::{
+    use crate::{
         block_on,
-        futures_lite::{pending, poll_once},
+        futures_lite::future::{pending, poll_once},
     };
     use futures_lite::pin;
 

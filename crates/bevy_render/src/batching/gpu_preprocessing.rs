@@ -9,6 +9,7 @@ use core::{
     sync::atomic::{AtomicU32, Ordering},
 };
 
+use crate::render_resource::BindingResource;
 use bevy_app::{App, Plugin};
 use bevy_derive::{Deref, DerefMut};
 use bevy_ecs::{
@@ -28,7 +29,6 @@ use bevy_utils::{default, TypeIdMap};
 use bytemuck::{Pod, Zeroable};
 use encase::{internal::WriteInto, ShaderSize};
 use nonmax::NonMaxU32;
-use crate::render_resource::BindingResource;
 use wgpu_types::{BufferUsages, DownlevelFlags, Features};
 
 use crate::{

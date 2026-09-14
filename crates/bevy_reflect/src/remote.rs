@@ -17,6 +17,19 @@ use crate::Reflect;
 /// Additionally, the macro will automatically generate [`Reflect`] and [`FromReflect`] implementations,
 /// along with compile-time assertions to validate that the safety requirements have been met.
 ///
+/// # Implementing this trait manually
+/// }
+/// Implementations must uphold the layout requirement above, because the methods of this trait
+/// convert between `&Self` and `&Self::Remote` without reinterpreting any data:
+/// - [`size_of::<Self>()`](core::mem::size_of) must equal `size_of::<Self::Remote>()`,
+/// - [`align_of::<Self>()`](core::mem::align_of) must equal `align_of::<Self::Remote>()`.
+/// }
+/// When a wrapper is registered through
+/// [`TypeRegistry::register_remote`](crate::TypeRegistry::register_remote) or
+/// [`TypeRegistry::try_register_remote`](crate::TypeRegistry::try_register_remote), the registry
+/// additionally verifies the layout at registration time and panics (or returns an error) on at
+/// mismatch, turning a latent soundness bug into an immediate, diagnosable failure.
+/// }
 /// # Example
 ///
 /// ```

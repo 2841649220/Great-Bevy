@@ -356,10 +356,11 @@ mod test {
     fn scoped_spawn() {
         let (sender, receiver) = async_channel::unbounded();
         let task_pool = TaskPool {};
-        let thread = thread::spawn(move || {
+        let _thread = thread::spawn(move || {
             let duration = time::Duration::from_millis(50);
             thread::sleep(duration);
-            let _ = sender.send(0);
+            // The send only wakes the scope; ignore the case where the channel is already closed.
+            drop(sender.send(0));
         });
         task_pool.scope(|scope| {
             scope.spawn(async {

@@ -4,6 +4,7 @@ use bevy_material::bind_group_layout_entries::{
 };
 
 use super::BufferVec;
+use crate::render_resource::BindingResource;
 use crate::{
     render_resource::batched_uniform_buffer::BatchedUniformBuffer,
     renderer::{RenderDevice, RenderQueue},
@@ -12,7 +13,6 @@ use bevy_ecs::{prelude::Component, resource::Resource};
 use core::marker::PhantomData;
 use encase::{private::WriteInto, ShaderSize, ShaderType};
 use nonmax::NonMaxU32;
-use crate::render_resource::BindingResource;
 use wgpu_types::{BufferUsages, Limits};
 
 /// Trait for types able to go in a [`GpuArrayBuffer`].

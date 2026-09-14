@@ -2,10 +2,7 @@ use crate::{
     extract_component::ExtractComponentPlugin,
     render_asset::RenderAssets,
     render_resource::{Buffer, BufferUsages, Texture, TextureFormat},
-    renderer::{
-        diligent_registry::DiligentHandle,
-        RenderDevice,
-    },
+    renderer::{diligent_registry::DiligentHandle, RenderDevice},
     storage::{GpuShaderBuffer, ShaderBuffer},
     sync_world::MainEntity,
     texture::GpuImage,
@@ -255,8 +252,9 @@ impl GpuReadbackBufferPool {
                 // from the slot alone - search every bucket for the pointer
                 // (bounded: one entry per in-flight readback).
                 for (_, textures) in self.textures.iter_mut() {
-                    if let Some(tex) =
-                        textures.iter_mut().find(|x| x.texture.as_raw() == texture.as_raw())
+                    if let Some(tex) = textures
+                        .iter_mut()
+                        .find(|x| x.texture.as_raw() == texture.as_raw())
                     {
                         tex.taken = false;
                         return;
@@ -309,16 +307,16 @@ enum ReadbackSource {
 struct GpuReadbacks {
     requested: Vec<GpuReadback>,
     mapped: Vec<GpuReadback>,
-    /// The cross-frame readback fence (方案 A): every per-frame copy signals
-    /// the fence with a monotonically increasing value, `map_buffers` polls
-    /// `get_completed_value` and falls back to a blocking `wait` after
-    /// `SYNC_FALLBACK_FRAMES` (方案 C).
+    /// The cross-frame readback fence (approach A): every per-frame copy
+    /// signals the fence with a monotonically increasing value, `map_buffers
+    /// polls `get_completed_value` and falls back to a blocking `wait` after
+    /// `SYNC_FALLBACK_FRAMES` (approach C).
     fence: Option<DiligentHandle<diligent_rs::Fence>>,
     next_value: u64,
 }
 
 /// Pending frames before the readback falls back to a blocking fence wait
-/// (方案 C).
+/// (approach C).
 const SYNC_FALLBACK_FRAMES: u32 = 8;
 
 struct GpuReadback {
@@ -505,13 +503,10 @@ pub(crate) fn submit_readback_commands(world: &mut World, context: &diligent_rs:
     }
 }
 
-/// Maps the completed readback staging resources (M1-4b-1 方案 A: fence poll
-/// per frame, `SYNC_FALLBACK_FRAMES` pending frames -> blocking wait,
-/// 方案 C) and sends the data through the per-readback channel.
-fn map_buffers(
-    render_device: Res<RenderDevice>,
-    mut readbacks: ResMut<GpuReadbacks>,
-) {
+/// Maps the completed readback staging resources (M1-4b-1 approach A: fence
+/// poll per frame, `SYNC_FALLBACK_FRAMES` pending frames -> blocking wait,
+/// approach C) and sends the data through the per-readback channel.
+fn map_buffers(render_device: Res<RenderDevice>, mut readbacks: ResMut<GpuReadbacks>) {
     let requested = readbacks.requested.drain(..).collect::<Vec<GpuReadback>>();
     if requested.is_empty() {
         return;
@@ -539,7 +534,7 @@ fn map_buffers(
         } else {
             readback.pending_frames += 1;
             if readback.pending_frames >= SYNC_FALLBACK_FRAMES {
-                // 方案 C: blocking wait for the copy.
+                // Approach C: blocking wait for the copy.
                 readback.fence_value > 0 && fence.wait(readback.fence_value).is_ok()
             } else {
                 false

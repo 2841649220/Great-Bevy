@@ -43,41 +43,48 @@ pub(crate) fn execute_texture_readback(
     let Some(device) = pending.device.diligent_device() else {
         return Err(crate::render_resource::BufferAsyncError);
     };
-    let format = match diligent_rs::format::to_diligent(pending.source.format()) {
-        Ok(format) => format,
-        Err(_) => return Err(crate::render_resource::BufferAsyncError),
+    let Ok(format) = diligent_rs::format::to_diligent(pending.source.format()) else {
+        return Err(crate::render_resource::BufferAsyncError);
     };
     let size = pending.source.size();
-    let staging = match device.create_staging_texture(
+    let Ok(staging) = device.create_staging_texture(
         "bevy_texture_readback_staging",
         size.width,
         size.height,
         format,
-    ) {
-        Ok(staging) => staging,
-        Err(_) => return Err(crate::render_resource::BufferAsyncError),
+    ) else {
+        return Err(crate::render_resource::BufferAsyncError);
     };
     let _guard = crate::renderer::diligent_registry::context_guard();
     if context
-        .copy_texture(texture, pending.mip_level, pending.array_slice, &staging, 0, 0)
+        .copy_texture(
+            texture,
+            pending.mip_level,
+            pending.array_slice,
+            &staging,
+            0,
+            0,
+        )
         .is_err()
     {
         return Err(crate::render_resource::BufferAsyncError);
     }
-    let mapped = match context.map_texture_subresource(
+    let Ok(Some(mapped)) = context.map_texture_subresource(
         &staging,
         0,
         0,
         diligent_rs::diligent_sys::bindings::_MAP_TYPE::MAP_READ
             as diligent_rs::diligent_sys::bindings::MAP_TYPE,
         false, // blocking: the copy must complete first
-    ) {
-        Ok(Some(mapped)) => mapped,
-        _ => return Err(crate::render_resource::BufferAsyncError),
+    ) else {
+        return Err(crate::render_resource::BufferAsyncError);
     };
     let stride = mapped.stride();
     let mut data = Vec::with_capacity(stride * size.height as usize);
     for row in 0..size.height {
+        // SAFETY: the subresource mapping is live until `mapped` is dropped below, and
+        // `MappedTextureSubresource::row` returns a pointer to at least `stride` bytes of it
+        // (`stride` is the mapped row pitch reported by the engine).
         data.extend_from_slice(unsafe {
             core::slice::from_raw_parts(mapped.row(row as usize), stride)
         });

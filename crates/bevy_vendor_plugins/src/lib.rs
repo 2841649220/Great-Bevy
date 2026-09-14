@@ -101,7 +101,6 @@ pub struct DenoiseSignals<'a> {
     pub motion_vectors: Option<&'a bevy_render::render_resource::TextureView>,
 }
 
-
 /// A probe hit: an SDK discovered under `plugins/<backend>/<vendor>/`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SdkProbe {
@@ -121,7 +120,7 @@ pub struct SdkProbe {
 // ---------------------------------------------------------------------------
 
 /// Super-resolution / TAAU upscaler (DLSS SR, FSR Upscaling, XeSS-SR,
-/// ARM ASR, SGSR 1/2, 星速引擎 AI 超分).
+/// ARM ASR, SGSR 1/2, and vendor-provided AI super-resolution engines).
 ///
 /// Implementations are [`Plugin`]s so they can register their render
 /// resources, pipelines and systems; the upscaling system itself runs
@@ -261,11 +260,12 @@ pub fn resolve_taa_exclusivity(taau_upscaler_registered: bool) -> TaaExclusivity
 /// Convenience app-level helpers for plugin registration (contract surface).
 pub mod prelude {
     pub use super::{
-        DenoiseSignals, DenoiserPlugin, DenoiserTemplate, DirectoryProbe, FrameGenInput,
-        FrameGenPlugin, FrameGenTemplate, LatencyPlugin, LatencyTemplate, PluginProbe,
-        PureAaPlugin, PureAaTemplate, SdkProbe, TaaExclusivity, UpscaleInput, UpscaleOutput,
-        UpscaleQuality, UpscalerPlugin, UpscalerTemplate, denoiser_template, frame_gen_template,
-        latency_template, pure_aa_template, resolve_taa_exclusivity, upscaler_template,
+        denoiser_template, frame_gen_template, latency_template, pure_aa_template,
+        resolve_taa_exclusivity, upscaler_template, DenoiseSignals, DenoiserPlugin,
+        DenoiserTemplate, DirectoryProbe, FrameGenInput, FrameGenPlugin, FrameGenTemplate,
+        LatencyPlugin, LatencyTemplate, PluginProbe, PureAaPlugin, PureAaTemplate, SdkProbe,
+        TaaExclusivity, UpscaleInput, UpscaleOutput, UpscaleQuality, UpscalerPlugin,
+        UpscalerTemplate,
     };
 }
 
@@ -438,8 +438,7 @@ mod tests {
 
     #[test]
     fn probe_detects_present_and_absent_sdks() {
-        let root =
-            std::env::temp_dir().join(format!("bevy_vp_probe_{}", std::process::id()));
+        let root = std::env::temp_dir().join(format!("bevy_vp_probe_{}", std::process::id()));
         let vendor_dir = root.join("dx12").join("nvidia");
         std::fs::create_dir_all(&vendor_dir).unwrap();
         std::fs::write(vendor_dir.join("sdk-version.txt"), "5.1.0\n").unwrap();
@@ -460,8 +459,7 @@ mod tests {
 
     #[test]
     fn probe_missing_backend_is_empty() {
-        let root =
-            std::env::temp_dir().join(format!("bevy_vp_empty_{}", std::process::id()));
+        let root = std::env::temp_dir().join(format!("bevy_vp_empty_{}", std::process::id()));
         let probe = DirectoryProbe::new("vk", "sdk-version.txt");
         assert!(probe.probe(&root).is_empty());
         std::fs::remove_dir_all(&root).ok();
@@ -471,15 +469,14 @@ mod tests {
     fn quality_modes_default_template() {
         let template = upscaler_template();
         assert_eq!(template.quality_modes().len(), 3);
-        assert!(template.quality_modes().contains(&UpscaleQuality::Performance));
+        assert!(template
+            .quality_modes()
+            .contains(&UpscaleQuality::Performance));
     }
 
     #[test]
     fn taa_exclusivity_reflects_upscaler_registration() {
-        assert_eq!(
-            resolve_taa_exclusivity(true),
-            TaaExclusivity::TaauActive
-        );
+        assert_eq!(resolve_taa_exclusivity(true), TaaExclusivity::TaauActive);
         assert_eq!(
             resolve_taa_exclusivity(false),
             TaaExclusivity::IndependentTaa

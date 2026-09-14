@@ -227,9 +227,7 @@ fn copy_depth_node(
     request: Res<DepthCopyRequest>,
     mut state: ResMut<DepthCopyState>,
 ) {
-    if !request.active
-        || state.pending.is_some()
-        || state.last_copied_frame == Some(request.frame)
+    if !request.active || state.pending.is_some() || state.last_copied_frame == Some(request.frame)
     {
         return;
     }
@@ -271,10 +269,7 @@ fn copy_depth_node(
 /// Maps the depth buffer after the render graph has submitted, then sends the
 /// de-padded pixel data to the main world. Same asynchronous pattern as
 /// `bevy_render::gpu_readback::map_buffers`.
-fn map_depth_buffer(
-    mut state: ResMut<DepthCopyState>,
-    sender: Res<DepthReadbackSender>,
-) {
+fn map_depth_buffer(mut state: ResMut<DepthCopyState>, sender: Res<DepthReadbackSender>) {
     let Some(copy) = state.pending.take() else {
         return;
     };
@@ -345,13 +340,23 @@ pub fn compute_stats(data: &[f32]) -> DepthStats {
             non_finite += 1;
         }
     }
-    let mean = if data.is_empty() { 0.0 } else { (sum / data.len() as f64) as f32 };
-    DepthStats { min, max, mean, non_finite }
+    let mean = if data.is_empty() {
+        0.0
+    } else {
+        (sum / data.len() as f64) as f32
+    };
+    DepthStats {
+        min,
+        max,
+        mean,
+        non_finite,
+    }
 }
 
 /// True when every value is identical (capture not ready / uniform content).
 pub fn is_uniform(data: &[f32]) -> bool {
-    data.first().is_none_or(|first| data.iter().all(|v| v == first))
+    data.first()
+        .is_none_or(|first| data.iter().all(|v| v == first))
 }
 
 /// Writes the depth EXR for a frame: Rgb32F with R=G=B=depth (the `image`
@@ -390,7 +395,8 @@ pub fn make_meta(file: &str, stats: &DepthStats, uniform: bool) -> DepthMeta {
         format: "Depth32Float, exported as Rgb32F EXR (R=G=B=depth)".into(),
         value_range: "[0, 1]: 1.0 = near plane, 0.0 = far (background/sky)".into(),
         projection: "perspective_infinite_reverse_rh (near=0.1, far=inf)".into(),
-        source_pass: "ViewDepthTexture (main 3d pass depth attachment) copied after main passes".into(),
+        source_pass: "ViewDepthTexture (main 3d pass depth attachment) copied after main passes"
+            .into(),
         msaa: "Off (single-sample depth texture required for texel copy)".into(),
         clear_value: 0.0,
         uniform,
@@ -422,7 +428,10 @@ mod tests {
 
     #[test]
     fn dealign_rows_identity_when_aligned() {
-        let raw = [0.25f32, 0.5, 0.75].iter().flat_map(|v| v.to_ne_bytes()).collect::<Vec<_>>();
+        let raw = [0.25f32, 0.5, 0.75]
+            .iter()
+            .flat_map(|v| v.to_ne_bytes())
+            .collect::<Vec<_>>();
         let out = dealign_rows(&raw, 3, 1);
         assert_eq!(out, vec![0.25, 0.5, 0.75]);
     }

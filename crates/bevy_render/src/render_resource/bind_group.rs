@@ -1,10 +1,10 @@
 use crate::{
     render_asset::RenderAssets,
+    render_resource::wgpu_compat::WgpuBindGroup,
     render_resource::{
-        BindGroupLayout, BindGroupEntry, BindGroupLayoutEntry, BindingResource, Buffer,
+        BindGroupEntry, BindGroupLayout, BindGroupLayoutEntry, BindingResource, Buffer,
         PipelineCache, Sampler, SamplerBindingType, TextureView, TextureViewDimension,
     },
-    render_resource::wgpu_compat::WgpuBindGroup,
     renderer::RenderDevice,
     texture::GpuImage,
 };
@@ -61,13 +61,20 @@ impl BindGroupDiligentState {
     /// (M2a): the pointer is cached for the per-draw `SetBufferOffset`
     /// path (`apply_dynamic_offsets`).
     pub(crate) fn cache_dynamic_variable(&self, binding: u32, variable: usize) {
-        self.dynamic_variables.lock().unwrap().insert(binding, variable);
+        self.dynamic_variables
+            .lock()
+            .unwrap()
+            .insert(binding, variable);
     }
 
     /// The cached SRB variable of a dynamic-offset binding, when it was
     /// resolved at bind-group creation (M2a).
     pub(crate) fn dynamic_variable(&self, binding: u32) -> Option<usize> {
-        self.dynamic_variables.lock().unwrap().get(&binding).copied()
+        self.dynamic_variables
+            .lock()
+            .unwrap()
+            .get(&binding)
+            .copied()
     }
 
     /// Records the first binding that failed to bind (later failures are

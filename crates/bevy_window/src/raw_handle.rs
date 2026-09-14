@@ -84,6 +84,14 @@ impl RawHandleWrapper {
     }
 
     /// Gets the stored window handle.
+    ///
+    /// # Thread Safety
+    ///
+    /// Retrieving the raw handle is memory-safe because the handle is a copyable descriptor
+    /// and the underlying window is kept alive by this wrapper. However, callers must ensure
+    /// that any platform API calls made with this handle adhere to platform-specific thread
+    /// constraints (e.g., some platforms such as macOS and Web require UI/window interactions
+    /// to occur exclusively on the main thread).
     pub fn get_window_handle(&self) -> RawWindowHandle {
         self.window_handle
     }
@@ -103,6 +111,13 @@ impl RawHandleWrapper {
     }
 
     /// Gets the stored display handle
+    ///
+    /// # Thread Safety
+    ///
+    /// Retrieving the raw handle is memory-safe because the handle is a copyable descriptor
+    /// and the underlying window is kept alive by this wrapper. However, callers must ensure
+    /// that any platform API calls made with this handle adhere to platform-specific thread
+    /// constraints (e.g., certain display servers require interactions on specific threads).
     pub fn get_display_handle(&self) -> RawDisplayHandle {
         self.display_handle
     }
@@ -112,20 +127,23 @@ impl RawHandleWrapper {
     /// # Safety
     ///
     /// The passed in [`RawDisplayHandle`] must be a valid display handle.
-    pub fn set_display_handle(&mut self, display_handle: RawDisplayHandle) -> &mut Self {
+    pub unsafe fn set_display_handle(&mut self, display_handle: RawDisplayHandle) -> &mut Self {
         self.display_handle = display_handle;
 
         self
     }
 }
 
-// SAFETY: [`RawHandleWrapper`] is just a normal "raw pointer", which doesn't impl Send/Sync. However the pointer is only
-// exposed via an unsafe method that forces the user to make a call for a given platform. (ex: some platforms don't
-// support doing window operations off of the main thread).
-// A recommendation for this pattern (and more context) is available here:
-// https://github.com/rust-windowing/raw-window-handle/issues/59
+// SAFETY: [`RawHandleWrapper`] holds an `Arc<dyn Any + Send + Sync>` which keeps the underlying
+// window allocation alive across threads, and raw handle descriptors (`RawWindowHandle`,
+// `RawDisplayHandle`) which are passive plain data. Passing the wrapper across threads is safe;
+// platform-specific thread affinity constraints only apply when interacting with the window/display
+// system using the handles, which is guarded by the safety contracts of `get_handle` and the
+// documented thread constraints of `get_window_handle` / `get_display_handle`.
 unsafe impl Send for RawHandleWrapper {}
-// SAFETY: This is safe for the same reasons as the Send impl above.
+// SAFETY: Shared immutable access to [`RawHandleWrapper`] across threads only allows reading
+// the copyable handle values and accessing the thread-safe `_window` Arc. Any mutation requires
+// exclusive `&mut` access, which cannot race across threads.
 unsafe impl Sync for RawHandleWrapper {}
 
 /// A [`RawHandleWrapper`] that cannot be sent across threads.
@@ -164,3 +182,51 @@ impl HasDisplayHandle for ThreadLockedRawWindowHandleWrapper {
 /// Holder of the [`RawHandleWrapper`] with wrappers, to allow use in asynchronous context
 #[derive(Debug, Clone, Component)]
 pub struct RawHandleWrapperHolder(pub Arc<Mutex<Option<RawHandleWrapper>>>);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use core::num::NonZeroIsize;
+    use raw_window_handle::{Win32WindowHandle, WindowsDisplayHandle};
+
+    fn assert_send<T: Send>() {}
+    fn assert_sync<T: Sync>() {}
+
+    #[test]
+    fn test_raw_handle_wrapper_send_sync() {
+        assert_send::<RawHandleWrapper>();
+        assert_sync::<RawHandleWrapper>();
+        assert_send::<RawHandleWrapperHolder>();
+        assert_sync::<RawHandleWrapperHolder>();
+    }
+
+    #[test]
+    fn test_raw_handle_wrapper_getters_and_setters() {
+        let dummy_window = Arc::new(());
+        let display_handle = RawDisplayHandle::Windows(WindowsDisplayHandle::new());
+        let window_handle =
+            RawWindowHandle::Win32(Win32WindowHandle::new(NonZeroIsize::new(1).unwrap()));
+
+        let mut wrapper = RawHandleWrapper {
+            _window: dummy_window,
+            window_handle,
+            display_handle,
+        };
+
+        assert_eq!(wrapper.get_window_handle(), window_handle);
+        assert_eq!(wrapper.get_display_handle(), display_handle);
+
+        let new_display_handle = RawDisplayHandle::Windows(WindowsDisplayHandle::new());
+        let new_window_handle =
+            RawWindowHandle::Win32(Win32WindowHandle::new(NonZeroIsize::new(2).unwrap()));
+
+        // SAFETY: Both handles are valid dummy descriptors for testing
+        unsafe {
+            wrapper.set_window_handle(new_window_handle);
+            wrapper.set_display_handle(new_display_handle);
+        }
+
+        assert_eq!(wrapper.get_window_handle(), new_window_handle);
+        assert_eq!(wrapper.get_display_handle(), new_display_handle);
+    }
+}

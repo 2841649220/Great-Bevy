@@ -9,6 +9,7 @@ use bevy_platform::{
 use bevy_ptr::{Ptr, PtrMut};
 use bevy_utils::TypeIdMap;
 use core::{
+    alloc::Layout,
     any::TypeId,
     fmt::Debug,
     ops::{Deref, DerefMut},
@@ -242,6 +243,63 @@ impl TypeRegistry {
         T: GetTypeRegistration,
     {
         self.register::<T>();
+    }
+
+    /// Registers a remote type wrapper `T` after asserting that its memory [`Layout`]
+    /// is identical to that of its remote type `T::Remote`.
+    ///
+    /// Remote type wrappers rely on reference conversions (and transmutes) between `&T` and `&T::Remote`.
+    /// This method ensures layout compatibility (size and alignment) so that layout
+    /// mismatches are caught safely at registration time.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the [`Layout`] of `T` does not match the [`Layout`] of `T::Remote`.
+    pub fn register_remote<T>(&mut self)
+    where
+        T: crate::ReflectRemote + GetTypeRegistration,
+    {
+        Self::assert_remote_layout_compatibility::<T>();
+        self.register::<T>();
+    }
+
+    /// Attempts to register a remote type wrapper `T`, verifying that its memory [`Layout`]
+    /// is identical to that of `T::Remote`.
+    ///
+    /// Returns `Err((wrapper_layout, remote_layout))` if the layouts do not match.
+    pub fn try_register_remote<T>(&mut self) -> Result<bool, (Layout, Layout)>
+    where
+        T: crate::ReflectRemote + GetTypeRegistration,
+    {
+        let wrapper_layout = Layout::new::<T>();
+        let remote_layout = Layout::new::<T::Remote>();
+        if wrapper_layout != remote_layout {
+            return Err((wrapper_layout, remote_layout));
+        }
+        let added = self.register_internal(TypeId::of::<T>(), T::get_type_registration);
+        if added {
+            T::register_type_dependencies(self);
+        }
+        Ok(added)
+    }
+
+    /// Asserts that remote wrapper `T` has an identical memory [`Layout`] to `T::Remote`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the [`Layout`] of `T` does not match the [`Layout`] of `T::Remote`.
+    pub fn assert_remote_layout_compatibility<T: crate::ReflectRemote>() {
+        let wrapper_layout = Layout::new::<T>();
+        let remote_layout = Layout::new::<T::Remote>();
+        assert_eq!(
+            wrapper_layout,
+            remote_layout,
+            "Layout mismatch between remote wrapper `{}` ({:?}) and remote type `{}` ({:?})",
+            core::any::type_name::<T>(),
+            wrapper_layout,
+            core::any::type_name::<T::Remote>(),
+            remote_layout,
+        );
     }
 
     /// Attempts to register the type described by `registration`.
@@ -1119,5 +1177,124 @@ mod test {
 
         let data = registration.data::<DataA>().unwrap();
         assert_eq!(data.0, 456);
+    }
+
+    #[test]
+    fn test_remote_type_registration_layout_assertions() {
+        use crate::ReflectRemote;
+
+        #[derive(Debug, Default, PartialEq, Eq)]
+        struct ExternalType {
+            a: u32,
+            b: u32,
+        }
+
+        #[derive(Reflect)]
+        #[repr(transparent)]
+        struct CompatibleWrapper(#[reflect(ignore)] ExternalType);
+
+        impl ReflectRemote for CompatibleWrapper {
+            type Remote = ExternalType;
+
+            fn as_remote(&self) -> &Self::Remote {
+                &self.0
+            }
+            fn as_remote_mut(&mut self) -> &mut Self::Remote {
+                &mut self.0
+            }
+            fn into_remote(self) -> Self::Remote {
+                self.0
+            }
+            fn as_wrapper(remote: &Self::Remote) -> &Self {
+                // SAFETY: CompatibleWrapper is repr(transparent) over ExternalType
+                unsafe { core::mem::transmute(remote) }
+            }
+            fn as_wrapper_mut(remote: &mut Self::Remote) -> &mut Self {
+                // SAFETY: CompatibleWrapper is repr(transparent) over ExternalType
+                unsafe { core::mem::transmute(remote) }
+            }
+            fn into_wrapper(remote: Self::Remote) -> Self {
+                Self(remote)
+            }
+        }
+
+        let mut registry = TypeRegistry::default();
+        registry.register_remote::<CompatibleWrapper>();
+        assert!(registry.contains(TypeId::of::<CompatibleWrapper>()));
+
+        #[derive(Reflect)]
+        struct IncompatibleWrapper {
+            #[reflect(ignore)]
+            remote: ExternalType,
+            extra: u32,
+        }
+
+        impl ReflectRemote for IncompatibleWrapper {
+            type Remote = ExternalType;
+
+            fn as_remote(&self) -> &Self::Remote {
+                &self.remote
+            }
+            fn as_remote_mut(&mut self) -> &mut Self::Remote {
+                &mut self.remote
+            }
+            fn into_remote(self) -> Self::Remote {
+                self.remote
+            }
+            fn as_wrapper(_: &Self::Remote) -> &Self {
+                unimplemented!()
+            }
+            fn as_wrapper_mut(_: &mut Self::Remote) -> &mut Self {
+                unimplemented!()
+            }
+            fn into_wrapper(remote: Self::Remote) -> Self {
+                Self { remote, extra: 0 }
+            }
+        }
+
+        let result = registry.try_register_remote::<IncompatibleWrapper>();
+        assert!(result.is_err());
+        let (wrapper_layout, remote_layout) = result.unwrap_err();
+        assert_ne!(wrapper_layout, remote_layout);
+    }
+
+    #[test]
+    #[should_panic(expected = "Layout mismatch between remote wrapper")]
+    fn test_remote_type_registration_layout_mismatch_panics() {
+        use crate::ReflectRemote;
+
+        #[derive(Default)]
+        struct ExternalType(
+            #[expect(dead_code, reason = "The field only exists to give the type a layout.")] u32,
+        );
+
+        #[derive(Reflect)]
+        struct MismatchedWrapper(#[reflect(ignore)] ExternalType, u32);
+
+        impl ReflectRemote for MismatchedWrapper {
+            type Remote = ExternalType;
+
+            fn as_remote(&self) -> &Self::Remote {
+                &self.0
+            }
+            fn as_remote_mut(&mut self) -> &mut Self::Remote {
+                &mut self.0
+            }
+            fn into_remote(self) -> Self::Remote {
+                self.0
+            }
+            fn as_wrapper(_: &Self::Remote) -> &Self {
+                unimplemented!()
+            }
+            fn as_wrapper_mut(_: &mut Self::Remote) -> &mut Self {
+                unimplemented!()
+            }
+            fn into_wrapper(remote: Self::Remote) -> Self {
+                Self(remote, 0)
+            }
+        }
+
+        let mut registry = TypeRegistry::default();
+        registry.register_remote::<MismatchedWrapper>();
     }
 }

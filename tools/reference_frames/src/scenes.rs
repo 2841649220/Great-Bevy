@@ -203,11 +203,7 @@ fn setup_pbr(app: &mut App, rig: CameraRig) {
                     commands.spawn((
                         Mesh3d(sphere_mesh.clone()),
                         MeshMaterial3d(mat),
-                        Transform::from_xyz(
-                            (i as f32 - 1.5) * 1.8,
-                            0.5,
-                            (j as f32 - 1.5) * 1.8,
-                        ),
+                        Transform::from_xyz((i as f32 - 1.5) * 1.8, 0.5, (j as f32 - 1.5) * 1.8),
                     ));
                 }
             }
@@ -218,12 +214,7 @@ fn setup_pbr(app: &mut App, rig: CameraRig) {
                     shadow_maps_enabled: true,
                     ..default()
                 },
-                Transform::from_rotation(Quat::from_euler(
-                    EulerRot::ZYX,
-                    0.0,
-                    -1.0,
-                    -0.6,
-                )),
+                Transform::from_rotation(Quat::from_euler(EulerRot::ZYX, 0.0, -1.0, -0.6)),
             ));
             commands.spawn((
                 PointLight {
@@ -311,8 +302,7 @@ fn setup_lighting(app: &mut App, rig: CameraRig) {
                     shadow_maps_enabled: true,
                     ..default()
                 },
-                Transform::from_xyz(0.0, 5.0, -2.0)
-                    .looking_at(Vec3::new(0.0, 0.0, 0.0), Vec3::Y),
+                Transform::from_xyz(0.0, 5.0, -2.0).looking_at(Vec3::new(0.0, 0.0, 0.0), Vec3::Y),
             ));
 
             commands.spawn((Camera3d::default(), rig.transform()));

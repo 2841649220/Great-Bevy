@@ -168,9 +168,9 @@ impl<'env> DynamicFunction<'env> {
     /// let args = ArgList::default().with_owned(25.0_f32).with_owned(75.0_f32);
     /// let result = func.call(args).unwrap().unwrap_owned();
     /// assert_eq!(result.try_take::<f32>().unwrap(), 100.0);
-    ///```
     ///
     /// ```
+    ///
     /// # use bevy_reflect::func::{ArgList, IntoFunction};
     /// #
     /// fn add_2(a: i32, b: i32) -> i32 {
@@ -456,7 +456,7 @@ impl_type_path!((in bevy_reflect) DynamicFunction<'env>);
 /// [overloaded]: DynamicFunction::with_overload
 impl<'env> Debug for DynamicFunction<'env> {
     fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
-        write!(f, "DynamicFunction({:?})", &self.internal)
+        write!(f, "DynamicFunction({:?})", self.internal)
     }
 }
 

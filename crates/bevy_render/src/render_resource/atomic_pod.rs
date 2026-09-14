@@ -79,7 +79,6 @@ pub unsafe trait AtomicPodBlob: Default + Send + Sync + 'static {}
 /// # use bevy_render::impl_atomic_pod;
 /// # use bevy_render::render_resource::AtomicPod;
 /// # use bytemuck::{Pod, Zeroable};
-/// # use std::mem::offset_of;
 /// #[derive(Clone, Copy, Default, Pod, Zeroable)]
 /// #[repr(C)]
 /// struct Foo {
@@ -177,13 +176,18 @@ macro_rules! impl_atomic_pod {
                         const _ASSERT_FIELD_SIZE: () = assert!(
                             ::core::mem::size_of::<$field_ty>() % 4 == 0
                         );
+                        const _ASSERT_FIELD_OFFSET: () = assert!(
+                            ::core::mem::offset_of!($pod_ty, $field_name) % 4 == 0
+                        );
 
                         // Extract the field we're looking for.
                         // Note that the field must have a size that is a
-                        // multiple of 4.
+                        // multiple of 4, and must start at an offset that is at
+                        // multiple of 4 (otherwise the word indexing below
+                        // would silently read the wrong words).
                         let words: [u32; ::core::mem::size_of::<$field_ty>() / 4] =
                             ::core::array::from_fn(|i| {
-                                self.0[offset_of!($pod_ty, $field_name) / 4 + i]
+                                self.0[::core::mem::offset_of!($pod_ty, $field_name) / 4 + i]
                                     .load(::bevy_platform::sync::atomic::Ordering::Relaxed)
                             });
                         *::bytemuck::must_cast_ref(&words)
@@ -191,13 +195,20 @@ macro_rules! impl_atomic_pod {
 
                     $(
                         pub fn $setter(&self, value: $field_ty) {
+                            const _ASSERT_FIELD_SIZE: () = assert!(
+                                ::core::mem::size_of::<$field_ty>() % 4 == 0
+                            );
+                            const _ASSERT_FIELD_OFFSET: () = assert!(
+                                ::core::mem::offset_of!($pod_ty, $field_name) % 4 == 0
+                            );
                             // Insert the appropriate field.
                             // Note that the field must have a size that is a
+                            // multiple of 4, and must start at an offset that is at
                             // multiple of 4.
                             let words: [u32; ::core::mem::size_of::<$field_ty>() / 4] =
                                 ::bytemuck::must_cast(value);
                             for i in 0..(::core::mem::size_of::<$field_ty>() / 4) {
-                                self.0[offset_of!($pod_ty, $field_name) / 4 + i]
+                                self.0[::core::mem::offset_of!($pod_ty, $field_name) / 4 + i]
                                     .store(words[i], ::bevy_platform::sync::atomic::Ordering::Relaxed);
                             }
                         }

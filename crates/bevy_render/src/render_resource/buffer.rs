@@ -211,8 +211,8 @@ impl<'a> BufferSlice<'a> {
             .clone()
             .expect("tried to call get_mapped_range on an unmapped buffer");
         BufferView {
-            data: data
-                [self.inner.offset as usize..self.inner.offset as usize + self.inner.size.get() as usize]
+            data: data[self.inner.offset as usize
+                ..self.inner.offset as usize + self.inner.size.get() as usize]
                 .to_vec(),
         }
     }

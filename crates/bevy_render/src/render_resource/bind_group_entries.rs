@@ -1,5 +1,5 @@
-use variadics_please::all_tuples_with_size;
 use crate::render_resource::{BindGroupEntry, BindingResource};
+use variadics_please::all_tuples_with_size;
 
 use super::{BufferBinding, Sampler, TextureView, WgpuSampler, WgpuTextureView};
 

@@ -153,7 +153,10 @@ fn run_capture(args: CaptureArgs) -> ExitCode {
 
     let out_dir = args.out.join(platform_dir()).join(spec.id);
     if let Err(e) = std::fs::create_dir_all(&out_dir) {
-        eprintln!("error: cannot create output directory {}: {e}", out_dir.display());
+        eprintln!(
+            "error: cannot create output directory {}: {e}",
+            out_dir.display()
+        );
         return ExitCode::from(4);
     }
     if args.frames == 0 {
@@ -163,7 +166,12 @@ fn run_capture(args: CaptureArgs) -> ExitCode {
 
     info!(
         "capture {}: {}x{}, frames {} (warmup {}), out {}",
-        spec.id, width, height, args.frames, args.warmup, out_dir.display()
+        spec.id,
+        width,
+        height,
+        args.frames,
+        args.warmup,
+        out_dir.display()
     );
 
     let mut app = App::new();
@@ -179,7 +187,8 @@ fn run_capture(args: CaptureArgs) -> ExitCode {
                     title: format!("reference_frames:{}", spec.title),
                     // Pin the scale factor so the physical surface equals the
                     // requested resolution regardless of OS display DPI.
-                    resolution: WindowResolution::new(width, height).with_scale_factor_override(1.0),
+                    resolution: WindowResolution::new(width, height)
+                        .with_scale_factor_override(1.0),
                     present_mode: PresentMode::AutoNoVsync,
                     ..default()
                 }),
@@ -202,7 +211,10 @@ fn run_capture(args: CaptureArgs) -> ExitCode {
 }
 
 fn run_scenes() -> ExitCode {
-    println!("{:<22} {:<8} {:<6} {:<6} notes", "id", "impl", "assets", "features");
+    println!(
+        "{:<22} {:<8} {:<6} {:<6} notes",
+        "id", "impl", "assets", "features"
+    );
     for spec in scenes::SCENES {
         let features = if spec.required_features.is_empty() {
             "-".to_string()
@@ -239,7 +251,10 @@ fn run_compare(args: CompareArgs) -> ExitCode {
     if a.dimensions() != b.dimensions() {
         eprintln!(
             "error: dimensions differ ({}x{} vs {}x{})",
-            a.width(), a.height(), b.width(), b.height()
+            a.width(),
+            a.height(),
+            b.width(),
+            b.height()
         );
         return ExitCode::from(6);
     }
@@ -248,7 +263,10 @@ fn run_compare(args: CompareArgs) -> ExitCode {
         eprintln!("error: image buffers are malformed");
         return ExitCode::from(7);
     };
-    println!("{}", serde_json::to_string_pretty(&stats).unwrap_or_else(|e| format!("{{\"error\": \"{e}\"}}")));
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&stats).unwrap_or_else(|e| format!("{{\"error\": \"{e}\"}}"))
+    );
 
     if let Some(path) = &args.whitelist {
         let whitelist: whitelist::Whitelist = match serde_json::from_str(
@@ -267,9 +285,16 @@ fn run_compare(args: CompareArgs) -> ExitCode {
             }
         };
         let verdict = whitelist::judge(&stats, &whitelist, &args.frame);
-        println!("{}", serde_json::to_string_pretty(&verdict).unwrap_or_else(|e| format!("{{\"error\": \"{e}\"}}")));
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&verdict)
+                .unwrap_or_else(|e| format!("{{\"error\": \"{e}\"}}"))
+        );
         if !verdict.passed {
-            eprintln!("error: whitelist verdict FAILED for scene '{}'", verdict.scene);
+            eprintln!(
+                "error: whitelist verdict FAILED for scene '{}'",
+                verdict.scene
+            );
             return ExitCode::from(9);
         }
     }

@@ -83,7 +83,7 @@ fn mse_rgb(a: &[u8], b: &[u8]) -> f64 {
     let mut acc = 0u64;
     for i in 0..n {
         let d = (a[i] as i64 - b[i] as i64).unsigned_abs();
-        acc += (d * d) as u64;
+        acc += d * d;
     }
     acc as f64 / n as f64
 }
@@ -174,8 +174,7 @@ fn ssim_channel(a: &[u8], b: &[u8], width: usize, height: usize, ch: usize) -> (
             cov /= window_px;
 
             let numerator = (2.0 * mean_a * mean_b + C1) * (2.0 * cov + C2);
-            let denominator =
-                (mean_a * mean_a + mean_b * mean_b + C1) * (var_a + var_b + C2);
+            let denominator = (mean_a * mean_a + mean_b * mean_b + C1) * (var_a + var_b + C2);
             acc += numerator / denominator;
             count += 1;
         }
@@ -191,7 +190,9 @@ mod tests {
     fn pattern(seed: u64, w: u32, h: u32) -> Vec<u8> {
         let mut state = seed;
         let mut next = move || {
-            state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            state = state
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
             (state >> 33) as u8
         };
         (0..w as usize * h as usize * 3).map(|_| next()).collect()
@@ -219,7 +220,11 @@ mod tests {
         let b = vec![255u8; (w * h * 3) as usize];
         let stats = compare_rgb(&a, &b, w, h).expect("valid buffers");
         assert_eq!(stats.mse, 255.0 * 255.0);
-        assert!((stats.psnr_db - 0.0).abs() < 1e-9, "psnr was {}", stats.psnr_db);
+        assert!(
+            (stats.psnr_db - 0.0).abs() < 1e-9,
+            "psnr was {}",
+            stats.psnr_db
+        );
         assert!(stats.ssim < 0.01, "ssim was {}", stats.ssim);
         assert_eq!(stats.max_abs_diff, 255);
         assert_eq!(stats.diff_histogram[255], (w * h * 3) as u64);
@@ -259,7 +264,11 @@ mod tests {
         }
         let stats = compare_rgb(&a, &b, w, h).expect("valid buffers");
         assert!(stats.ssim < 1.0, "ssim was {}", stats.ssim);
-        assert!(stats.ssim > 0.9, "ssim was {} (expected high but not 1.0)", stats.ssim);
+        assert!(
+            stats.ssim > 0.9,
+            "ssim was {} (expected high but not 1.0)",
+            stats.ssim
+        );
         // 1 px wide column differs by 255 over 64 rows x 3 channels:
         // MSE = 255^2/64, PSNR = 10*log10(64) ≈ 18.06 dB.
         assert!(stats.psnr_db.is_finite());

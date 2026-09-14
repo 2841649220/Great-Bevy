@@ -1,7 +1,7 @@
 //! V15: PRS ↔ shader reflection consistency verification (D3D12 backend).
 //!
 //! Tests the core design premise of the wgpu → Diligent backend replacement
-//! (施工方案 §4.3.3): "the PRS descriptor is the source of truth — Diligent
+//! (implementation plan §4.3.3): "the PRS descriptor is the source of truth — Diligent
 //! does not infer the layout from shader reflection, and it rejects a
 //! pipeline whose explicit resource signatures are inconsistent with the
 //! shaders' declared resources."

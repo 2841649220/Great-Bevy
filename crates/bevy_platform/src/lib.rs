@@ -29,6 +29,10 @@ pub mod sync;
 pub mod thread;
 pub mod time;
 
+#[cfg(test)]
+#[path = "time/fallback.rs"]
+mod fallback_time;
+
 /// Frequently used items which would typically be included in most contexts.
 ///
 /// When adding `no_std` support to a crate for the first time, often there's a substantial refactor

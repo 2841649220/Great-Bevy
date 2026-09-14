@@ -1,6 +1,7 @@
 use alloc::vec::Vec;
 use bevy_ecs::{prelude::*, system::command::spawn_batch, world::CommandQueue};
 use bevy_platform::collections::HashMap;
+use bevy_platform::sync::atomic::{AtomicU64, Ordering};
 #[cfg(feature = "bevy_reflect")]
 use bevy_reflect::Reflect;
 use core::time::Duration;
@@ -43,8 +44,17 @@ impl<'w, 's> DelayedCommands<'w, 's> {
         let mut queues = self
             .queues
             .drain()
-            .map(|(submit_at, queue)| DelayedCommandQueue { submit_at, queue })
+            .map(|(submit_at, queue)| DelayedCommandQueue {
+                submit_at,
+                sequence: 0,
+                queue,
+            })
             .collect::<Vec<_>>();
+
+        // Sort by the requested delay so that the spawn order (and therefore the sequence numbers
+        // assigned below) is deterministic: `self.queues` is a hash map, whose iteration order is
+        // not stable between runs.
+        queues.sort_by_key(|queue| queue.submit_at);
 
         self.commands.queue(move |world: &mut World| {
             // We use the default Time<()> here intentionally to support custom clocks
@@ -53,6 +63,9 @@ impl<'w, 's> DelayedCommands<'w, 's> {
             for queue in queues.iter_mut() {
                 // Turn relative delays into absolute elapsed times
                 queue.submit_at += elapsed;
+                // Record the submission order. Queues that become ready during the same frame are
+                // executed in this order, which makes their relative order deterministic.
+                queue.sequence = next_queue_sequence();
             }
             spawn_batch(queues).apply(world);
         });
@@ -135,9 +148,33 @@ pub struct DelayedCommandQueue {
     /// The elapsed time from startup when `queue` should be submitted.
     pub submit_at: Duration,
 
+    /// Monotonic submission order of this queue.
+    ///
+    /// Multiple queues can become ready during the same frame. When that happens the queues are
+    /// executed in ascending `(submit_at, sequence)` order, which keeps execution deterministic
+    /// (and first-in-first-out for queues submitted with an identical `submit_at`).
+    ///
+    /// This is an implementation detail of [`DelayedCommands`] and is overwritten when the queue
+    /// is spawned. Queues constructed manually should leave it at `0`.
+    #[cfg_attr(feature = "bevy_reflect", reflect(ignore))]
+    pub sequence: u64,
+
     /// The queue to be submitted when time is up.
     #[cfg_attr(feature = "bevy_reflect", reflect(ignore))]
     pub queue: CommandQueue,
+}
+
+/// Counter used to assign [`DelayedCommandQueue::sequence`].
+///
+/// This is a process-wide counter (delayed command queues are explicit world commands, so they are
+/// never duplicated by cloning a world) and is only used to break ties between queues that become
+/// ready during the same frame.
+static QUEUE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+/// Returns the next submission sequence number.
+#[inline]
+fn next_queue_sequence() -> u64 {
+    QUEUE_SEQUENCE.fetch_add(1, Ordering::Relaxed)
 }
 
 /// The system used to check [`DelayedCommandQueue`]s, which are usually spawned
@@ -149,12 +186,22 @@ pub fn check_delayed_command_queues(
     mut commands: Commands,
 ) {
     let elapsed = time.elapsed();
-    for (e, mut queue) in queues {
-        if queue.submit_at <= elapsed {
-            // Write the contained delayed commands to the world.
-            commands.append(&mut queue.queue);
-            commands.entity(e).despawn();
-        }
+    let mut ready: Vec<(Duration, u64, Entity, Mut<DelayedCommandQueue>)> = queues
+        .into_iter()
+        .filter(|(_, queue)| queue.submit_at <= elapsed)
+        .map(|(e, queue)| (queue.submit_at, queue.sequence, e, queue))
+        .collect();
+
+    // Execute the matured queues in chronological order. Ties are broken by submission order
+    // (`sequence`) rather than by `Entity`: `Entity`'s `Ord` compares the raw bit representation,
+    // which orders entity indices in reverse, and entity indices can be recycled, so it cannot be
+    // used to recover the order in which the queues were submitted.
+    ready.sort_by_key(|(submit_at, sequence, ..)| (*submit_at, *sequence));
+
+    for (_, _, e, mut queue) in ready {
+        // Write the contained delayed commands to the world.
+        commands.append(&mut queue.queue);
+        commands.entity(e).despawn();
     }
 }
 
@@ -220,5 +267,55 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn delayed_commands_chronological_order_same_frame() {
+        use alloc::vec::Vec;
+        use bevy_ecs::{prelude::Resource, world::World};
+
+        #[derive(Resource, Default)]
+        struct ExecutionLog(Vec<usize>);
+
+        let mut app = App::new();
+        app.add_plugins(TimePlugin)
+            .init_resource::<ExecutionLog>()
+            .insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_millis(
+                100,
+            )));
+
+        // Frame 0: initialize time plugin and world
+        app.update();
+
+        // Enqueue delayed commands with out-of-order durations: 30ms, 10ms, 20ms
+        {
+            let mut commands = app.world_mut().commands();
+            let mut delayed = commands.delayed();
+            delayed
+                .duration(Duration::from_millis(30))
+                .queue(|world: &mut World| {
+                    world.resource_mut::<ExecutionLog>().0.push(3);
+                });
+            delayed
+                .duration(Duration::from_millis(10))
+                .queue(|world: &mut World| {
+                    world.resource_mut::<ExecutionLog>().0.push(1);
+                });
+            delayed
+                .duration(Duration::from_millis(20))
+                .queue(|world: &mut World| {
+                    world.resource_mut::<ExecutionLog>().0.push(2);
+                });
+        }
+
+        // Frame 1: time advances to 200ms, maturing 10ms, 20ms, and 30ms in the same frame.
+        app.update();
+
+        let log = &app.world().resource::<ExecutionLog>().0;
+        assert_eq!(
+            log,
+            &[1, 2, 3],
+            "Delayed commands must execute in strict chronological submit_at order"
+        );
     }
 }

@@ -1,6 +1,4 @@
-use super::{
-    Dlss, DlssError, DlssFeature, DlssFeatureFlags, DlssPerfQualityMode,
-};
+use super::{Dlss, DlssError, DlssFeature, DlssFeatureFlags, DlssPerfQualityMode};
 use bevy_camera::{Camera3d, CameraMainTextureUsages, MainPassResolutionOverride};
 use bevy_core_pipeline::prepass::{DepthPrepass, MotionVectorPrepass};
 use bevy_diagnostic::FrameCount;

@@ -35,7 +35,27 @@ impl Instant {
     pub fn now() -> Instant {
         let getter = ELAPSED_GETTER.load(Ordering::Acquire);
 
-        // SAFETY: Function pointer is always valid
+        // A null pointer is never stored (`ELAPSED_GETTER` is initialized with the real
+        // `unset_getter` and `Instant::set_elapsed` only accepts a `fn() -> Duration`, which the
+        // type system guarantees to be non-null). The check makes the transmute below total:
+        // `fn` pointers are non-nullable, so transmuting a null `*mut ()` into one would be
+        // immediate undefined behavior rather than merely a crash.
+        if getter.is_null() {
+            return Self(unset_getter());
+        }
+
+        // SAFETY:
+        // 1. Calling convention and signature: `getter` is either [`unset_getter`] (stored by the
+        //    initializer of [`ELAPSED_GETTER`]) or a value that was passed to
+        //    [`Instant::set_elapsed`], which only accepts `fn() -> Duration`. It therefore always
+        //    points to executable code using the standard Rust calling convention with exactly that
+        //    signature, and the bit patterns of `*mut ()` and `fn() -> Duration` are interchangeable
+        //    on every platform Bevy supports (both are pointer-sized).
+        // 2. Non-null and valid: the check above rejects the null pointer, and the `Release`/`Acquire
+        //    pair used by [`Instant::set_elapsed`] / this load guarantees the stored pointer is
+        //    visible with all of its writes.
+        // 3. Lifetime: [`Instant::set_elapsed`] is `unsafe` and requires the caller to keep the
+        //    function valid for as long as it can be observed here.
         let getter = unsafe { core::mem::transmute::<*mut (), fn() -> Duration>(getter) };
 
         Self((getter)())
@@ -151,21 +171,41 @@ impl fmt::Debug for Instant {
 fn unset_getter() -> Duration {
     crate::cfg::switch! {
         #[cfg(target_arch = "x86")] => {
-            // SAFETY: standard technique for getting a nanosecond counter on x86
+            // SAFETY:
+            // 1. `_rdtsc` (Read Time-Stamp Counter) is an x86 CPU intrinsic reading the 64-bi
+            //    cycle count into register pair EDX:EAX. It does not access or dereference memory.
+            // 2. The intrinsic is executable from user-mode (ring 3) on modern x86 processors
+            //    unless CR4.TSD is explicitly set by the kernel, which standard OS environments
+            //    leave cleared for high-resolution timing.
+            // 3. No preconditions or invariants can be violated by reading this register; it has
+            //    no side-effects on CPU register state beyond the returned cycle count.
             let nanos = unsafe {
                 core::arch::x86::_rdtsc()
             };
             Duration::from_nanos(nanos)
         }
         #[cfg(target_arch = "x86_64")] => {
-            // SAFETY: standard technique for getting a nanosecond counter on x86_64
+            // SAFETY:
+            // 1. `_rdtsc` (Read Time-Stamp Counter) is an x86_64 CPU intrinsic reading the 64-bi
+            //    cycle count into RDX:RAX. It does not access or dereference memory.
+            // 2. The intrinsic is executable from user-mode (ring 3) on x86_64 processors
+            //    unless CR4.TSD is explicitly set by the kernel, which standard OS environments
+            //    leave cleared for high-resolution timing.
+            // 3. No preconditions or invariants can be violated by reading this register; it has
+            //    no side-effects on CPU register state beyond the returned cycle count.
             let nanos = unsafe {
                 core::arch::x86_64::_rdtsc()
             };
             Duration::from_nanos(nanos)
         }
         #[cfg(target_arch = "aarch64")] => {
-            // SAFETY: standard technique for getting a nanosecond counter of aarch64
+            // SAFETY:
+            // 1. `cntvct_el0` is the standard ARMv8-A Virtual Counter register, accessible at EL0 (user space)
+            //    when enabled by EL1 (the OS kernel via CNTHCTL_EL2/CNTKCTL_EL1, which standard OS environments
+            //    like Linux, macOS, and Windows always configure).
+            // 2. The inline assembly instruction `mrs {}, cntvct_el0` only writes to an allocated 64-bi
+            //    output register (`out(reg) ticks`) without modifying any memory or system flags.
+            // 3. No preconditions on memory or pointer validity are required; the instruction has no memory side-effects.
             let nanos = unsafe {
                 let mut ticks: u64;
                 core::arch::asm!("mrs {}, cntvct_el0", out(reg) ticks);
@@ -176,5 +216,50 @@ fn unset_getter() -> Duration {
         _ => {
             panic!("An elapsed time getter has not been provided to `Instant`. Please use `Instant::set_elapsed(...)` before calling `Instant::now()`")
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::sync::atomic::AtomicU64;
+
+    #[test]
+    fn test_fallback_instant_now() {
+        let t1 = Instant::now();
+        let t2 = Instant::now();
+        assert!(t2 >= t1);
+        let diff = t2 - t1;
+        assert_eq!(t2.duration_since(t1), diff);
+        assert_eq!(t1.duration_since(t2), Duration::ZERO);
+        assert_eq!(t1.saturating_duration_since(t2), Duration::ZERO);
+        let elapsed = t1.elapsed();
+        assert!(elapsed >= Duration::ZERO);
+    }
+
+    #[test]
+    fn test_fallback_instant_set_elapsed() {
+        static COUNTER: AtomicU64 = AtomicU64::new(100_000);
+
+        fn mock_getter() -> Duration {
+            Duration::from_nanos(COUNTER.fetch_add(50_000, Ordering::Relaxed))
+        }
+
+        // SAFETY: `mock_getter` is a valid fn pointer with standard Rust ABI matching
+        // `fn() -> Duration`. It returns monotonically increasing nanoseconds and is valid
+        // for the lifetime of the process.
+        unsafe {
+            Instant::set_elapsed(mock_getter);
+        }
+
+        let t1 = Instant::now();
+        let t2 = Instant::now();
+        assert!(t2 > t1);
+        assert_eq!(t2.duration_since(t1), Duration::from_nanos(50_000));
+        assert_eq!(
+            t2.checked_duration_since(t1),
+            Some(Duration::from_nanos(50_000))
+        );
+        assert_eq!(t1.checked_duration_since(t2), None);
     }
 }

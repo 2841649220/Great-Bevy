@@ -110,6 +110,7 @@ impl CommandQueue {
     /// Take all commands from `other` and append them to `self`, leaving `other` empty
     pub fn append(&mut self, other: &mut CommandQueue) {
         self.bytes.append(&mut other.bytes);
+        other.cursor = 0;
     }
 
     /// Returns false if there are any commands in the queue
@@ -552,5 +553,168 @@ mod test {
         let mut queue = CommandQueue::default();
         queue.push(CommandWithPadding(0, 0));
         let _ = format!("{:?}", queue.bytes);
+    }
+
+    #[test]
+    fn test_command_queue_append_cursor_reset() {
+        let mut queue1 = CommandQueue::default();
+        let mut queue2 = CommandQueue::default();
+
+        queue2.push(|_: &mut World| {});
+        // Manually set cursor to simulate non-zero cursor on queue2
+        queue2.cursor = queue2.bytes.len();
+
+        queue1.append(&mut queue2);
+        assert_eq!(queue2.cursor, 0);
+        assert!(queue2.bytes.is_empty());
+
+        let mut world = World::new();
+        // Subsequent apply or push should not create out-of-bounds set_len
+        queue2.apply(&mut world);
+        assert_eq!(queue2.cursor, 0);
+    }
+
+    #[test]
+    fn test_command_queue_append_adversarial_states() {
+        use alloc::{sync::Arc, vec, vec::Vec};
+        use core::sync::atomic::{AtomicUsize, Ordering};
+
+        let mut world = World::new();
+
+        // 1. Empty to Empty
+        let mut q_empty1 = CommandQueue::default();
+        let mut q_empty2 = CommandQueue::default();
+        q_empty1.append(&mut q_empty2);
+        assert_eq!(q_empty1.cursor, 0);
+        assert_eq!(q_empty2.cursor, 0);
+        assert!(q_empty1.is_empty());
+        assert!(q_empty2.is_empty());
+        q_empty1.apply(&mut world);
+        q_empty2.apply(&mut world);
+
+        // 2. Empty into Populated and Populated into Empty
+        let counter = Arc::new(AtomicUsize::new(0));
+        let mut q_pop = CommandQueue::default();
+        let c = counter.clone();
+        q_pop.push(move |_: &mut World| {
+            c.fetch_add(1, Ordering::SeqCst);
+        });
+        let mut q_empty = CommandQueue::default();
+        // Append empty to populated
+        q_pop.append(&mut q_empty);
+        assert_eq!(q_empty.cursor, 0);
+        assert!(!q_pop.is_empty());
+
+        // Append populated to empty
+        let mut q_dest = CommandQueue::default();
+        q_dest.append(&mut q_pop);
+        assert_eq!(q_pop.cursor, 0);
+        assert!(q_pop.is_empty());
+        assert!(!q_dest.is_empty());
+        q_dest.apply(&mut world);
+        assert_eq!(counter.load(Ordering::SeqCst), 1);
+
+        // 3. Multiple sequential appends with execution order verification
+        let execution_log = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let mut q1 = CommandQueue::default();
+        let mut q2 = CommandQueue::default();
+        let mut q3 = CommandQueue::default();
+        let mut q4 = CommandQueue::default();
+
+        let log = execution_log.clone();
+        q1.push(move |_: &mut World| {
+            log.lock().unwrap().push(1);
+        });
+        let log = execution_log.clone();
+        q2.push(move |_: &mut World| {
+            log.lock().unwrap().push(2);
+        });
+        let log = execution_log.clone();
+        q3.push(move |_: &mut World| {
+            log.lock().unwrap().push(3);
+        });
+        let log = execution_log.clone();
+        q4.push(move |_: &mut World| {
+            log.lock().unwrap().push(4);
+        });
+
+        q1.append(&mut q2);
+        q1.append(&mut q3);
+        q1.append(&mut q4);
+
+        assert_eq!(q2.cursor, 0);
+        assert_eq!(q3.cursor, 0);
+        assert_eq!(q4.cursor, 0);
+        assert!(q2.is_empty());
+        assert!(q3.is_empty());
+        assert!(q4.is_empty());
+
+        q1.apply(&mut world);
+        assert_eq!(*execution_log.lock().unwrap(), vec![1, 2, 3, 4]);
+
+        // 4. Reusing other after append (push more, append again, apply again)
+        let log = execution_log.clone();
+        q2.push(move |_: &mut World| {
+            log.lock().unwrap().push(5);
+        });
+        let log = execution_log.clone();
+        q2.push(move |_: &mut World| {
+            log.lock().unwrap().push(6);
+        });
+        q1.append(&mut q2);
+        assert_eq!(q2.cursor, 0);
+        assert!(q2.is_empty());
+        q1.apply(&mut world);
+        assert_eq!(*execution_log.lock().unwrap(), vec![1, 2, 3, 4, 5, 6]);
+
+        // 5. Partially read cursor simulation and corruption check
+        let mut receiver = CommandQueue::default();
+        let mut donor = CommandQueue::default();
+        let log = execution_log.clone();
+        donor.push(move |_: &mut World| {
+            log.lock().unwrap().push(7);
+        });
+        let log = execution_log.clone();
+        donor.push(move |_: &mut World| {
+            log.lock().unwrap().push(8);
+        });
+        // Simulate non-zero cursor on donor
+        donor.cursor = 100;
+        receiver.append(&mut donor);
+        // cursor MUST be reset to 0
+        assert_eq!(donor.cursor, 0);
+        assert!(donor.bytes.is_empty());
+
+        // Reusing donor after cursor rese
+        let log = execution_log.clone();
+        donor.push(move |_: &mut World| {
+            log.lock().unwrap().push(9);
+        });
+        donor.apply(&mut world);
+        receiver.apply(&mut world);
+        assert_eq!(
+            *execution_log.lock().unwrap(),
+            vec![1, 2, 3, 4, 5, 6, 9, 7, 8]
+        );
+
+        // 6. Stress test: 1,000 commands across multiple queues
+        let stress_counter = Arc::new(AtomicUsize::new(0));
+        let mut main_queue = CommandQueue::default();
+        for _ in 0..10 {
+            let mut sub_queue = CommandQueue::default();
+            for _ in 0..100 {
+                let sc = stress_counter.clone();
+                sub_queue.push(move |_: &mut World| {
+                    sc.fetch_add(1, Ordering::Relaxed);
+                });
+            }
+            main_queue.append(&mut sub_queue);
+            assert_eq!(sub_queue.cursor, 0);
+            assert!(sub_queue.bytes.is_empty());
+        }
+        main_queue.apply(&mut world);
+        assert_eq!(stress_counter.load(Ordering::SeqCst), 1000);
+        assert_eq!(main_queue.cursor, 0);
+        assert!(main_queue.is_empty());
     }
 }

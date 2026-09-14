@@ -2,12 +2,12 @@ use super::{
     diligent_draw, diligent_features, diligent_mapping, diligent_pso, diligent_registry,
     RenderQueue,
 };
+use crate::render_resource::wgpu_compat::WgpuBindGroup;
 use crate::render_resource::{
     BindGroup, BindGroupDiligentState, BindGroupLayout, Buffer, BufferSlice, ComputePipeline,
     RawRenderPipelineDescriptor, RenderPipeline, Sampler, ShaderModule, ShaderModuleDescriptor,
     ShaderSource, Texture, WgpuSampler,
 };
-use crate::render_resource::wgpu_compat::WgpuBindGroup;
 use crate::render_resource::{BindGroupEntry, BufferAsyncError};
 use crate::renderer::{diligent_registry::DiligentHandle, WgpuWrapper};
 use alloc::ffi::CString;
@@ -46,7 +46,8 @@ pub struct RenderDevice {
     /// (shader module id) -> shader record, so the public create_*_pipeline
     /// entry points can resolve the Diligent objects from the descriptors
     /// (M1-4b-2: keyed by the module handle's id).
-    shader_modules: Arc<Mutex<std::collections::HashMap<u32, Weak<diligent_pso::ShaderModuleRecord>>>>,
+    shader_modules:
+        Arc<Mutex<std::collections::HashMap<u32, Weak<diligent_pso::ShaderModuleRecord>>>>,
     /// (pipeline layout id) -> layout record (PRS array + immediate_size).
     pipeline_layouts:
         Arc<Mutex<std::collections::HashMap<u32, Weak<diligent_pso::PipelineLayoutRecord>>>>,
@@ -110,7 +111,9 @@ impl RenderDevice {
     /// engine failed to initialize or the device is not D3D12 (e.g. a
     /// Vulkan device). The `unsafe` surface is minimized: callers get a raw
     /// pointer they may hand to a vendor SDK verbatim.
-    pub fn native_d3d12_device(&self) -> Option<*mut diligent_rs::diligent_sys::bindings::ID3D12Device> {
+    pub fn native_d3d12_device(
+        &self,
+    ) -> Option<*mut diligent_rs::diligent_sys::bindings::ID3D12Device> {
         let diligent = self.diligent_device()?;
         match diligent.native_d3d12_device() {
             Ok(handle) => handle,
@@ -225,9 +228,10 @@ impl RenderDevice {
     /// Functions may panic if you use unsupported features.
     #[inline]
     pub fn features(&self) -> wgpu_types::Features {
-        self.diligent_caps
-            .as_ref()
-            .map_or_else(|| self.device.features(), |caps| caps.features().as_features())
+        self.diligent_caps.as_ref().map_or_else(
+            || self.device.features(),
+            |caps| caps.features().as_features(),
+        )
     }
 
     /// List all [`Limits`](wgpu_types::Limits) that were requested of this device.
@@ -242,8 +246,10 @@ impl RenderDevice {
     pub fn limits(&self) -> wgpu_types::Limits {
         let mut limits = self.device.limits();
         if let Some(caps) = &self.diligent_caps {
-            limits.max_storage_buffers_per_shader_stage = caps.max_storage_buffers_per_shader_stage();
-            limits.max_storage_textures_per_shader_stage = caps.max_storage_textures_per_shader_stage();
+            limits.max_storage_buffers_per_shader_stage =
+                caps.max_storage_buffers_per_shader_stage();
+            limits.max_storage_textures_per_shader_stage =
+                caps.max_storage_textures_per_shader_stage();
         }
         limits
     }
@@ -255,11 +261,12 @@ impl RenderDevice {
             ShaderSource::Wgsl(src) => naga::front::wgsl::parse_str(src)
                 .map_err(|e| format!("failed to parse WGSL shader: {e}")),
             #[cfg(feature = "shader_format_spirv")]
-            ShaderSource::SpirV(words) => {
-                naga::front::spv::Frontend::new(words.iter().copied(), &naga::front::spv::Options::default())
-                    .parse()
-                    .map_err(|e| format!("failed to parse SPIR-V shader: {e}"))
-            }
+            ShaderSource::SpirV(words) => naga::front::spv::Frontend::new(
+                words.iter().copied(),
+                &naga::front::spv::Options::default(),
+            )
+            .parse()
+            .map_err(|e| format!("failed to parse SPIR-V shader: {e}")),
         }
     }
 
@@ -284,10 +291,7 @@ impl RenderDevice {
     /// To avoid UB, ensure any unchecked shaders are sound!
     /// This method should never be called for user-supplied shaders.
     #[inline]
-    pub unsafe fn create_shader_module(
-        &self,
-        desc: ShaderModuleDescriptor,
-    ) -> ShaderModule {
+    pub unsafe fn create_shader_module(&self, desc: ShaderModuleDescriptor) -> ShaderModule {
         self.create_shader_module_inner(desc, true)
     }
 
@@ -295,10 +299,7 @@ impl RenderDevice {
     ///
     /// See [`ValidateShader`](bevy_shader::ValidateShader) for more information on the tradeoffs involved with shader validation.
     #[inline]
-    pub fn create_and_validate_shader_module(
-        &self,
-        desc: ShaderModuleDescriptor,
-    ) -> ShaderModule {
+    pub fn create_and_validate_shader_module(&self, desc: ShaderModuleDescriptor) -> ShaderModule {
         self.create_shader_module_inner(desc, true)
     }
 
@@ -335,7 +336,10 @@ impl RenderDevice {
     /// `FinishFrame` (the wgpu poll is gone - the diligent context is the
     /// only execution path).
     #[inline]
-    pub fn poll(&self, _maintain: crate::render_resource::PollType) -> Result<PollStatus, PollError> {
+    pub fn poll(
+        &self,
+        _maintain: crate::render_resource::PollType,
+    ) -> Result<PollStatus, PollError> {
         if let Some(context) = &self.diligent_context {
             let _guard = diligent_registry::context_guard();
             context.finish_frame();
@@ -349,10 +353,7 @@ impl RenderDevice {
         &self,
         _desc: &crate::render_resource::CommandEncoderDescriptor,
     ) -> crate::render_resource::CommandEncoder {
-        crate::render_resource::CommandEncoder::new(
-            self.clone(),
-            self.diligent_context_handle(),
-        )
+        crate::render_resource::CommandEncoder::new(self.clone(), self.diligent_context_handle())
     }
 
     /// Creates a new [`BindGroup`](crate::render_resource::BindGroup).
@@ -636,8 +637,7 @@ impl RenderDevice {
         // resources).
         let variable_name = CString::new(diligent_pso::canonical_prs_name(binding))
             .map_err(|e| format!("SRB variable name for binding {binding}: {e}"))?;
-        let variable =
-            srb_variable_by_name(srb, &variable_name, probe_stages)?;
+        let variable = srb_variable_by_name(srb, &variable_name, probe_stages)?;
         match resource {
             ResourceBinding::Buffer {
                 buffer,
@@ -645,9 +645,7 @@ impl RenderDevice {
                 size,
                 kind,
             } => match kind {
-                BufferBindKind::Uniform => {
-                    set_buffer(variable, *buffer, *offset, *size, binding)
-                }
+                BufferBindKind::Uniform => set_buffer(variable, *buffer, *offset, *size, binding),
                 // BUFFER_SRV / BUFFER_UAV: the engine's D3D12 variable cache
                 // accepts *buffer views*, not raw buffers (CacheResourceView
                 // QueryInterfaces the object for IID_BufferViewD3D12) - the
@@ -678,18 +676,24 @@ impl RenderDevice {
                     }
                 }
             }
-            ResourceBinding::TextureView(view) => set_object(variable, *view as *mut sys::IDeviceObject),
+            ResourceBinding::TextureView(view) => {
+                set_object(variable, *view as *mut sys::IDeviceObject)
+            }
             ResourceBinding::TextureViewArray(views) => {
-                let objects: Vec<*mut sys::IDeviceObject> =
-                    views.iter().map(|v| *v as *mut sys::IDeviceObject).collect();
+                let objects: Vec<*mut sys::IDeviceObject> = views
+                    .iter()
+                    .map(|v| *v as *mut sys::IDeviceObject)
+                    .collect();
                 set_object_array(variable, &objects, binding)
             }
             ResourceBinding::Sampler(sampler) => {
                 set_object(variable, *sampler as *mut sys::IDeviceObject)
             }
             ResourceBinding::SamplerArray(samplers) => {
-                let objects: Vec<*mut sys::IDeviceObject> =
-                    samplers.iter().map(|s| *s as *mut sys::IDeviceObject).collect();
+                let objects: Vec<*mut sys::IDeviceObject> = samplers
+                    .iter()
+                    .map(|s| *s as *mut sys::IDeviceObject)
+                    .collect();
                 set_object_array(variable, &objects, binding)
             }
         }?;
@@ -774,10 +778,7 @@ impl RenderDevice {
     /// descriptor's shaders (compiled to HLSL/SPIR-V) and the layout record
     /// (PRS array + immediate size) registered by the pipeline cache.
     #[inline]
-    pub fn create_render_pipeline(
-        &self,
-        desc: &RawRenderPipelineDescriptor,
-    ) -> RenderPipeline {
+    pub fn create_render_pipeline(&self, desc: &RawRenderPipelineDescriptor) -> RenderPipeline {
         let (value, immediate) = self.create_diligent_render_pipeline(desc);
         RenderPipeline {
             id: crate::render_resource::RenderPipelineId::new(),
@@ -858,9 +859,7 @@ impl RenderDevice {
     ) -> ComputePipeline {
         let (value, immediate) = if let Some(module) = self.shader_record(desc.module) {
             let layout_record = desc.layout.and_then(|layout| self.layout_record(layout));
-            let immediate = layout_record
-                .as_deref()
-                .and_then(create_immediate_srb);
+            let immediate = layout_record.as_deref().and_then(create_immediate_srb);
             let value = diligent_pso::create_compute_pipeline(
                 self,
                 desc,
@@ -961,7 +960,14 @@ impl RenderDevice {
         } else {
             0
         };
-        match device.create_buffer(&name, desc.size, bind_flags, usage, cpu_access, initial_data) {
+        match device.create_buffer(
+            &name,
+            desc.size,
+            bind_flags,
+            usage,
+            cpu_access,
+            initial_data,
+        ) {
             Ok(buffer) => Some(DiligentHandle::new(Arc::new(buffer))),
             Err(err) => {
                 bevy_log::warn!(
@@ -1273,11 +1279,13 @@ fn buffer_default_view(
 ) -> Result<*mut sys::IBufferView, String> {
     let view_type = match kind {
         BufferBindKind::StorageReadOnly => sys::_BUFFER_VIEW_TYPE::BUFFER_VIEW_SHADER_RESOURCE,
-        BufferBindKind::StorageReadWrite => {
-            sys::_BUFFER_VIEW_TYPE::BUFFER_VIEW_UNORDERED_ACCESS
-        }
+        BufferBindKind::StorageReadWrite => sys::_BUFFER_VIEW_TYPE::BUFFER_VIEW_UNORDERED_ACCESS,
         BufferBindKind::Uniform => unreachable!("uniform buffers bind via SetBufferRange"),
     } as sys::BUFFER_VIEW_TYPE;
+    // SAFETY: `buffer` is a live `IBuffer` resolved from the registry (its
+    // wrapper is borrowed by the `BindGroupEntry` being bound), so the raw
+    // pointer and its vtable are valid; the `GetDefaultView` slot is checked
+    // with `as_ref().ok_or(..)`.
     let get = unsafe {
         (*(*buffer).pVtbl)
             .Buffer
@@ -1317,6 +1325,9 @@ fn srb_variable_by_name(
     name: &CStr,
     probe_stages: wgpu_types::ShaderStages,
 ) -> Result<*mut sys::IShaderResourceVariable, String> {
+    // SAFETY: `srb` is a live diligent-rs `ShaderResourceBinding` wrapper
+    // (held by the bind group state), so its raw pointer and vtable are valid;
+    // the `GetVariableByName` slot is checked with `as_ref().ok_or(..)`.
     let get = unsafe {
         (*(*srb.as_raw()).pVtbl)
             .ShaderResourceBinding
@@ -1342,6 +1353,10 @@ fn srb_variable_by_name(
         if !probe_stages.contains(wgpu_stage) {
             continue;
         }
+        // SAFETY: `srb` is alive for the whole call and `name` is a `CStr` borrowed
+        // for the entire function, so the string outlives the call; the engine
+        // only reads it and returns a variable owned by the SRB (null when the
+        // name is absent for that stage).
         let variable = unsafe { get(srb.as_raw(), diligent_stage, name.as_ptr()) };
         if !variable.is_null() {
             return Ok(variable);
@@ -1356,6 +1371,9 @@ fn set_object(
     variable: *mut sys::IShaderResourceVariable,
     object: *mut sys::IDeviceObject,
 ) -> Result<(), String> {
+    // SAFETY: `variable` is a live SRB variable (resolved from the live SRB and
+    // cached in the bind group state, whose SRB handle keeps it alive), so its
+    // vtable is valid; the `Set` slot is checked with `as_ref().ok_or(..)`.
     let set = unsafe {
         (*(*variable).pVtbl)
             .ShaderResourceVariable
@@ -1375,6 +1393,9 @@ fn set_object_array(
     objects: &[*mut sys::IDeviceObject],
     _binding: u32,
 ) -> Result<(), String> {
+    // SAFETY: `variable` is a live SRB variable (resolved from the live SRB /
+    // cached in the bind group state), so its vtable is valid; the `SetArray
+    // slot is checked with `as_ref().ok_or(..)`.
     let set = unsafe {
         (*(*variable).pVtbl)
             .ShaderResourceVariable
@@ -1384,15 +1405,7 @@ fn set_object_array(
     };
     // Safety: `variable` is alive and `objects` is valid for the duration of
     // the call.
-    unsafe {
-        set(
-            variable,
-            objects.as_ptr(),
-            0,
-            objects.len() as u32,
-            0,
-        )
-    };
+    unsafe { set(variable, objects.as_ptr(), 0, objects.len() as u32, 0) };
     Ok(())
 }
 
@@ -1413,6 +1426,10 @@ fn set_buffer(
     size: Option<u64>,
     _binding: u32,
 ) -> Result<(), String> {
+    // SAFETY: `variable` is a live SRB variable pointer (resolved from the live
+    // SRB or cached in the bind group state, as in `set_object`), so its vtable
+    // pointer is valid; the `SetBufferRange` slot is checked with
+    // `as_ref().ok_or(..)` below.
     let vtbl = unsafe { &(*(*variable).pVtbl).ShaderResourceVariable };
     let set_range = vtbl
         .SetBufferRange
@@ -1420,16 +1437,7 @@ fn set_buffer(
         .ok_or("IShaderResourceVariable::SetBufferRange missing")?;
     // Safety: `variable` is alive, `buffer` is a live constant buffer and
     // the range fits the buffer (validated by the engine).
-    unsafe {
-        set_range(
-            variable,
-            buffer.cast(),
-            offset,
-            size.unwrap_or(0),
-            0,
-            0,
-        )
-    };
+    unsafe { set_range(variable, buffer.cast(), offset, size.unwrap_or(0), 0, 0) };
     Ok(())
 }
 
@@ -1439,8 +1447,10 @@ fn set_buffer_array(
     buffers: &[*mut sys::IBuffer],
     _binding: u32,
 ) -> Result<(), String> {
-    let objects: Vec<*mut sys::IDeviceObject> =
-        buffers.iter().map(|b| *b as *mut sys::IDeviceObject).collect();
+    let objects: Vec<*mut sys::IDeviceObject> = buffers
+        .iter()
+        .map(|b| *b as *mut sys::IDeviceObject)
+        .collect();
     set_object_array(variable, &objects, _binding)
 }
 
@@ -1463,10 +1473,11 @@ pub(crate) struct ImmediateSrb {
 }
 
 /// Creates the immediate SRB for a layout record, when it has one (M2a).
-fn create_immediate_srb(
-    record: &diligent_pso::PipelineLayoutRecord,
-) -> Option<ImmediateSrb> {
-    let (prs, name) = record.immediate_prs.as_ref().zip(record.immediate_name.as_ref())?;
+fn create_immediate_srb(record: &diligent_pso::PipelineLayoutRecord) -> Option<ImmediateSrb> {
+    let (prs, name) = record
+        .immediate_prs
+        .as_ref()
+        .zip(record.immediate_name.as_ref())?;
     let srb = match prs.create_shader_resource_binding(true) {
         Ok(srb) => DiligentHandle::new(Arc::new(srb)),
         Err(err) => {
@@ -1575,7 +1586,11 @@ pub(crate) fn apply_dynamic_offsets(
     dynamic_bindings: &[u32],
     offsets: &[u32],
 ) -> Result<(), String> {
-    validate_dynamic_offsets(dynamic_bindings, offsets, constant_buffer_offset_alignment())?;
+    validate_dynamic_offsets(
+        dynamic_bindings,
+        offsets,
+        constant_buffer_offset_alignment(),
+    )?;
     for (&binding, &offset) in dynamic_bindings.iter().zip(offsets) {
         let variable = state
             .dynamic_variable(binding)
@@ -1597,6 +1612,10 @@ fn set_buffer_offset(
     offset: u32,
     _binding: u32,
 ) -> Result<(), String> {
+    // SAFETY: `variable` is the live variable cached for the bind group's
+    // dynamic bindings (the engine documents that the pointer never changes and
+    // the SRB handle keeps it alive), so its vtable is valid; the
+    // `SetBufferOffset` slot is checked with `as_ref().ok_or(..)`.
     let set = unsafe {
         (*(*variable).pVtbl)
             .ShaderResourceVariable
@@ -1624,6 +1643,11 @@ pub(crate) fn set_inline_constants(
     num_constants: u32,
 ) -> Result<(), String> {
     let variable = variable as *mut sys::IShaderResourceVariable;
+    // SAFETY: `variable` is the immediate-SRB variable resolved once at
+    // pipeline creation (`ImmediateSrb::variable`); the engine documents that
+    // the pointer never changes while the SRB handle stored next to it keeps
+    // it alive, so its vtable is valid; the `SetInlineConstants` slot is checked
+    // with `as_ref().ok_or(..)`.
     let set = unsafe {
         (*(*variable).pVtbl)
             .ShaderResourceVariable
@@ -1664,7 +1688,7 @@ mod tests {
     #[test]
     fn buffer_registry_key_is_the_buffer_id() {
         let id = BufferId::new();
-        let ptr = 0x1 as *mut sys::IBuffer;
+        let ptr = core::ptr::dangling_mut::<sys::IBuffer>();
         let registry = diligent_registry::ResourceRegistry::default();
         registry.register_buffer(id, ptr);
         assert_eq!(registry.resolve_buffer(id), Some(ptr));
@@ -1712,7 +1736,7 @@ mod tests {
     #[test]
     fn resource_registry_round_trips_via_consumer_reference() {
         let id = BufferId::new();
-        let ptr = 0x2 as *mut sys::IBuffer;
+        let ptr = core::ptr::dangling_mut::<sys::IBuffer>();
         let registry = diligent_registry::ResourceRegistry::default();
         registry.register_buffer(id, ptr);
         assert_eq!(registry.resolve_buffer(id), Some(ptr));

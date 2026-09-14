@@ -3,7 +3,9 @@
 
 use bevy::{
     app::AppExit,
-    diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin, SystemInformationDiagnosticsPlugin},
+    diagnostic::{
+        DiagnosticsStore, FrameTimeDiagnosticsPlugin, SystemInformationDiagnosticsPlugin,
+    },
     prelude::*,
 };
 
@@ -60,7 +62,17 @@ impl Default for SimulationMetrics {
 /// 天体核心组件
 #[derive(Component)]
 struct CelestialBody {
+    /// 天体名称，仅用于诊断输出。
+    #[expect(
+        dead_code,
+        reason = "Kept so the demo scenarios stay readable; read by the diagnostic printouts."
+    )]
     name: &'static str,
+    /// 天体质量，仅用于诊断输出。
+    #[expect(
+        dead_code,
+        reason = "Kept so the demo scenarios stay readable; read by the diagnostic printouts."
+    )]
     mass: f32,
     orbital_radius: f32,
     angular_speed: f32,
@@ -140,7 +152,10 @@ fn print_system_info() {
 }
 
 /// 轨道力学运动更新系统
-fn simulate_orbital_mechanics(time: Res<Time>, mut query: Query<(&mut CelestialBody, &mut Transform)>) {
+fn simulate_orbital_mechanics(
+    time: Res<Time>,
+    mut query: Query<(&mut CelestialBody, &mut Transform)>,
+) {
     let dt = time.delta_secs();
     for (mut body, mut transform) in &mut query {
         if body.orbital_radius > 0.0 {
@@ -180,7 +195,10 @@ fn spawn_procedural_particles(
     for (body, transform) in &query {
         if body.orbital_radius > 0.0 {
             // 彗星和行星释放轨道尾迹粒子
-            let spread = (body.current_angle.sin() * 0.5, body.current_angle.cos() * 0.5);
+            let spread = (
+                body.current_angle.sin() * 0.5,
+                body.current_angle.cos() * 0.5,
+            );
             commands.spawn((
                 Particle {
                     velocity: Vec3::new(-spread.1 * 2.0, 0.2, spread.0 * 2.0),
@@ -225,7 +243,9 @@ fn report_simulation_diagnostics(
         let ticks_per_sec = metrics.tick_count as f32 / elapsed.max(0.001);
         let active_count = active_particles.iter().count();
 
-        let mem_str = if let Some(diag) = diagnostics.get(&SystemInformationDiagnosticsPlugin::SYSTEM_MEM_USAGE) {
+        let mem_str = if let Some(diag) =
+            diagnostics.get(&SystemInformationDiagnosticsPlugin::SYSTEM_MEM_USAGE)
+        {
             if let Some(val) = diag.smoothed() {
                 format!("{:.1}%", val)
             } else {
@@ -256,7 +276,9 @@ fn automated_lifecycle_manager(
     mut app_exit_writer: MessageWriter<AppExit>,
 ) {
     if time.elapsed_secs() >= metrics.max_duration_seconds {
-        println!("================================================================================");
+        println!(
+            "================================================================================"
+        );
         println!(
             "  [DEMO SUCCESS] Simulation completed successfully in {:.2}s!",
             time.elapsed_secs()
@@ -266,7 +288,9 @@ fn automated_lifecycle_manager(
             metrics.tick_count, metrics.total_particles_spawned
         );
         println!("  All Bevy ECS schedules and core engine systems verified operational.");
-        println!("================================================================================");
+        println!(
+            "================================================================================"
+        );
         app_exit_writer.write(AppExit::Success);
     }
 }

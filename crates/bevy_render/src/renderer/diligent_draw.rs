@@ -75,6 +75,10 @@ pub(crate) struct RawOwned<T> {
 // engine level; the release on drop is thread-safe (same discipline as
 // `DiligentHandle`).
 unsafe impl<T> Send for RawOwned<T> {}
+// SAFETY: the `Send` impl above documents the same deliberate opt-in: the
+// wrapped engine object is ref-counted and thread-safe, and this type only
+// exposes shared access to that object (plus the release-on-drop), so sharing
+// the handle across threads is sound.
 unsafe impl<T> Sync for RawOwned<T> {}
 
 impl<T> RawOwned<T> {
@@ -102,6 +106,10 @@ impl<T> Drop for RawOwned<T> {
 fn release_interface(ptr: *mut c_void) {
     // Safety: `ptr` is a live Diligent interface (see `RawOwned`).
     let obj = ptr.cast::<sys::IObject>();
+    // SAFETY: `ptr` is a live engine interface - only `RawOwned` calls this,
+    // and it only ever wraps non-null engine-returned pointers - so `pVtbl
+    // points at the static method table every Diligent interface (and so every
+    // `IObject`) starts with.
     let vtbl = unsafe { &*(*obj).pVtbl };
     let release = vtbl
         .Object
@@ -125,7 +133,10 @@ fn release_interface(ptr: *mut c_void) {
 /// concurrent access corrupts the D3D12 command list).
 fn context_methods(
     ctx: &diligent_rs::DeviceContext,
-) -> (std::sync::MutexGuard<'static, ()>, &sys::IDeviceContextMethods) {
+) -> (
+    std::sync::MutexGuard<'static, ()>,
+    &sys::IDeviceContextMethods,
+) {
     let guard = diligent_registry::context_guard();
     // Safety: `ctx` is alive for the duration of the call.
     let methods = unsafe { &(*(*ctx.as_raw()).pVtbl).DeviceContext };
@@ -197,7 +208,10 @@ pub(crate) fn draw_indexed_indirect(
 
 /// `IDeviceContext::DispatchCompute` (DeviceContext.h:3037; M1-4b-2: the
 /// compute dispatch path - the transition wgpu compute recording is gone).
-pub(crate) fn dispatch_compute(ctx: &diligent_rs::DeviceContext, attribs: &sys::DispatchComputeAttribs) {
+pub(crate) fn dispatch_compute(
+    ctx: &diligent_rs::DeviceContext,
+    attribs: &sys::DispatchComputeAttribs,
+) {
     let (_guard, methods) = context_methods(ctx);
     let dispatch = methods
         .DispatchCompute
@@ -329,6 +343,10 @@ pub(crate) fn end_debug_group(ctx: &diligent_rs::DeviceContext) {
 
 /// `ISwapChain::SetMaximumFrameLatency` (SwapChain.h:99; D3D11/D3D12 only).
 pub(crate) fn set_maximum_frame_latency(swap_chain: &diligent_rs::SwapChain, latency: u32) {
+    // SAFETY: `swap_chain` is a live diligent-rs wrapper (a non-null raw engine
+    // pointer with a valid vtable), so the `SwapChain` method table can be read
+    // in place; the slot is an `Option<fn>` that the `expect` below checks
+    // before it is called.
     let set = unsafe {
         (*(*swap_chain.as_raw()).pVtbl)
             .SwapChain
@@ -435,6 +453,12 @@ impl Default for RenderPassCache {
 /// `ITextureView::GetDesc` via the universal DeviceObject slot (the C API
 /// casts `IDeviceObject::GetDesc` to the concrete description type).
 fn texture_view_desc(view: *mut sys::ITextureView) -> Result<sys::TextureViewDesc, String> {
+    if view.is_null() {
+        return Err("ITextureView::GetDesc called with a null view".into());
+    };
+    // SAFETY: `view` was null-checked above and is a live `ITextureView`, so
+    // its vtable pointer is valid; the `GetDesc` slot is checked with
+    // `as_ref().ok_or(..)`.
     let get = unsafe {
         (*(*view).pVtbl)
             .DeviceObject
@@ -445,11 +469,23 @@ fn texture_view_desc(view: *mut sys::ITextureView) -> Result<sys::TextureViewDes
     // Safety: the engine returns a pointer to internal storage that is valid
     // while the view is alive; we copy the value out.
     let ptr = unsafe { get(view.cast::<sys::IDeviceObject>()) };
+    if ptr.is_null() {
+        return Err("ITextureView::GetDesc returned null".into());
+    };
+    // SAFETY: `ptr` was null-checked above and points at the view's live
+    // `TextureViewDesc` (the engine returns a pointer to its internal desc
+    // storage), so the copy is in bounds and happens while the view is alive.
     Ok(unsafe { *ptr.cast::<sys::TextureViewDesc>() })
 }
 
 /// `ITextureView::GetTexture` (does not AddRef).
 fn view_texture(view: *mut sys::ITextureView) -> Result<*mut sys::ITexture, String> {
+    if view.is_null() {
+        return Err("ITextureView::GetTexture called with a null view".into());
+    };
+    // SAFETY: `view` was null-checked above and is a live `ITextureView`, so
+    // its vtable pointer is valid; the `GetTexture` slot is checked with
+    // `as_ref().ok_or(..)`.
     let get = unsafe {
         (*(*view).pVtbl)
             .TextureView
@@ -471,6 +507,9 @@ fn view_texture(view: *mut sys::ITextureView) -> Result<*mut sys::ITexture, Stri
 /// (`ITexture::GetDesc().SampleCount`; 1 for single-sample textures).
 fn texture_sample_count(view: *mut sys::ITextureView) -> Result<u32, String> {
     let texture = view_texture(view)?;
+    // SAFETY: `texture` comes from `view_texture` (which returns `Err` on null),
+    // so it is a live `ITexture` with a valid vtable; the `GetDesc` slot is
+    // checked with `as_ref().ok_or(..)`.
     let get = unsafe {
         (*(*texture).pVtbl)
             .DeviceObject
@@ -485,6 +524,9 @@ fn texture_sample_count(view: *mut sys::ITextureView) -> Result<u32, String> {
     if ptr.is_null() {
         return Err("ITexture::GetDesc returned null".into());
     }
+    // SAFETY: `ptr` was null-checked above and points at the texture's live
+    // `TextureDesc` (engine-internal storage valid while the texture is alive),
+    // so reading `SampleCount` out of it is in bounds.
     Ok(unsafe { (*ptr.cast::<sys::TextureDesc>()).SampleCount })
 }
 
@@ -493,6 +535,12 @@ fn texture_create_view(
     texture: *mut sys::ITexture,
     view_desc: &sys::TextureViewDesc,
 ) -> Result<*mut sys::ITextureView, String> {
+    if texture.is_null() {
+        return Err("ITexture::CreateView called with a null texture".into());
+    };
+    // SAFETY: `texture` was null-checked above and is a live `ITexture`, so
+    // its vtable pointer is valid; the `CreateView` slot is checked with
+    // `as_ref().ok_or(..)`.
     let create = unsafe {
         (*(*texture).pVtbl)
             .Texture
@@ -551,7 +599,13 @@ fn resolve_attachment_view(
         view_desc.TextureDim,
         view_desc.MostDetailedMip,
         view_desc.MostDetailedMip + view_desc.NumMipLevels,
+        // SAFETY: `view_desc` is a plain Rust copy of the engine desc (not a live
+        // engine pointer) and the union member is a `Uint32`, so every bi
+        // pattern is a valid `FirstArraySlice` read.
         unsafe { view_desc.__bindgen_anon_1.FirstArraySlice },
+        // SAFETY: both union members read here (`FirstArraySlice` and
+        // `NumArraySlices`) are `Uint32`s of that same copied desc, so all bi
+        // patterns are valid.
         unsafe { view_desc.__bindgen_anon_1.FirstArraySlice + view_desc.__bindgen_anon_2.NumArraySlices },
     );
     // TODO-REMOVE-M1-4 (M1-3 review, fix 7): the wgpu view's format override
@@ -596,11 +650,15 @@ fn depth_ops<T>(
             match ops.load {
                 wgpu_types::LoadOp::Load => sys::_ATTACHMENT_LOAD_OP::ATTACHMENT_LOAD_OP_LOAD,
                 wgpu_types::LoadOp::Clear(_) => sys::_ATTACHMENT_LOAD_OP::ATTACHMENT_LOAD_OP_CLEAR,
-                wgpu_types::LoadOp::DontCare(_) => sys::_ATTACHMENT_LOAD_OP::ATTACHMENT_LOAD_OP_DISCARD,
+                wgpu_types::LoadOp::DontCare(_) => {
+                    sys::_ATTACHMENT_LOAD_OP::ATTACHMENT_LOAD_OP_DISCARD
+                },
             } as sys::ATTACHMENT_LOAD_OP,
             match ops.store {
                 wgpu_types::StoreOp::Store => sys::_ATTACHMENT_STORE_OP::ATTACHMENT_STORE_OP_STORE,
-                wgpu_types::StoreOp::Discard => sys::_ATTACHMENT_STORE_OP::ATTACHMENT_STORE_OP_DISCARD,
+                wgpu_types::StoreOp::Discard => {
+                    sys::_ATTACHMENT_STORE_OP::ATTACHMENT_STORE_OP_DISCARD
+                },
             } as sys::ATTACHMENT_STORE_OP,
         )),
         None => Ok((
@@ -636,6 +694,12 @@ fn create_render_pass(
         pPreserveAttachments: std::ptr::null(),
         pShadingRateAttachment: std::ptr::null(),
     };
+    // SAFETY: `RenderPassDesc` is a plain-old-data FFI aggregate: an embedded
+    // `DeviceObjectAttribs` holding one CChar name pointer, plus integer counts and
+    // raw array pointers. The all-zero pattern is a valid empty desc (null name
+    // and arrays, zero counts) and each field is assigned below - Name,
+    // AttachmentCount/pAttachments, SubpassCount/pSubpasses and the (null)
+    // dependency pair.
     let mut desc: sys::RenderPassDesc = unsafe { std::mem::zeroed() };
     desc._DeviceObjectAttribs.Name = name.as_ptr();
     desc.AttachmentCount = attachments.len() as u32;
@@ -646,6 +710,9 @@ fn create_render_pass(
     desc.pDependencies = std::ptr::null();
 
     let mut render_pass: *mut sys::IRenderPass = std::ptr::null_mut();
+    // SAFETY: `device` is a live diligent-rs `RenderDevice` wrapper (non-null raw
+    // pointer with a valid vtable), so reading its `CreateRenderPass` slot in
+    // place is sound; the slot is checked with `as_ref().ok_or(..)`.
     let create = unsafe {
         (*(*device.as_raw()).pVtbl)
             .RenderDevice
@@ -673,6 +740,11 @@ fn create_framebuffer(
     views: &[*mut sys::ITextureView],
 ) -> Result<RawOwned<sys::IFramebuffer>, String> {
     let name = CString::new(label.unwrap_or("bevy_framebuffer")).map_err(|e| e.to_string())?;
+    // SAFETY: `FramebufferDesc` is a plain-old-data FFI aggregate: an embedded
+    // `DeviceObjectAttribs` name pointer, the `pRenderPass`/`ppAttachments` pointers and
+    // integer sizes. All-zero is a valid empty desc and every field is se
+    // below; Width/Height/NumArraySlices stay 0, which the engine documents as
+    // "derive the size from the attachments".
     let mut desc: sys::FramebufferDesc = unsafe { std::mem::zeroed() };
     desc._DeviceObjectAttribs.Name = name.as_ptr();
     desc.pRenderPass = render_pass;
@@ -683,6 +755,9 @@ fn create_framebuffer(
     desc.NumArraySlices = 0;
 
     let mut framebuffer: *mut sys::IFramebuffer = std::ptr::null_mut();
+    // SAFETY: `device` is a live diligent-rs `RenderDevice` wrapper (non-null raw
+    // pointer with a valid vtable), so reading its `CreateFramebuffer` slot in
+    // place is sound; the slot is checked with `as_ref().ok_or(..)`.
     let create = unsafe {
         (*(*device.as_raw()).pVtbl)
             .RenderDevice
@@ -714,6 +789,10 @@ fn resolved_view_keys(views: &[*mut sys::ITextureView]) -> Vec<usize> {
 /// (FramebufferBase.hpp:72-100), so the desc carries the real framebuffer
 /// size even though `CreateFramebuffer` was called with zeros.
 fn framebuffer_size(framebuffer: *mut sys::IFramebuffer) -> Result<(u32, u32), String> {
+    // SAFETY: every caller passes a framebuffer taken from the render-pass
+    // cache or from `create_framebuffer` (both reject null), so it is a live
+    // `IFramebuffer` with a valid vtable; the `GetDesc` slot is checked with
+    // `as_ref().ok_or(..)`.
     let get = unsafe {
         (*(*framebuffer).pVtbl)
             .DeviceObject
@@ -721,9 +800,16 @@ fn framebuffer_size(framebuffer: *mut sys::IFramebuffer) -> Result<(u32, u32), S
             .as_ref()
             .ok_or("IFramebuffer::GetDesc missing from vtable")?
     };
-    // Safety: the engine returns a pointer to internal storage that is
+    // SAFETY: the engine returns a pointer to internal storage that is
     // valid while the framebuffer is alive; we copy the value out.
     let ptr = unsafe { get(framebuffer.cast::<sys::IDeviceObject>()) };
+    if ptr.is_null() {
+        return Err("IFramebuffer::GetDesc returned null".into());
+    };
+    // SAFETY: the check above rejects the null pointer, and for a live
+    // framebuffer the engine returns a pointer to the object's own internal
+    // desc storage, which stays valid for as long as the object does; the value
+    // is copied out immediately.
     let desc = unsafe { *ptr.cast::<sys::FramebufferDesc>() };
     Ok((desc.Width, desc.Height))
 }
@@ -743,10 +829,12 @@ pub(crate) fn begin_tracked_render_pass(
     descriptor: &crate::render_resource::RenderPassDescriptor,
 ) -> Result<(), String> {
     if descriptor.multiview_mask.is_some() {
-        return Err("multiview render passes are not supported on the diligent path \
+        return Err(
+            "multiview render passes are not supported on the diligent path \
                     (TODO-REMOVE-M1-4)"
-            .into());
-    }
+                .into(),
+        );
+    };
     if descriptor.occlusion_query_set.is_some() {
         return Err("occlusion queries are not supported on the diligent path \
                     (TODO-REMOVE-M1-4)"
@@ -800,7 +888,8 @@ pub(crate) fn begin_tracked_render_pass(
         // TEMP-BISECT-M2A2: force the resolve off (M2a-1 behavior) to confirm
         // the resolve wiring is the TDR regression.
         let resolve_disabled = std::env::var_os("DILIGENT_RS_NO_RESOLVE").is_some();
-        let (resolve_ref, _resolve_present) = if let Some(resolve_target) = attachment.resolve_target
+        let (resolve_ref, _resolve_present) = if let Some(resolve_target) =
+            attachment.resolve_target
             && !resolve_disabled
         {
             let resolve_view = resolve_attachment_view(
@@ -831,7 +920,8 @@ pub(crate) fn begin_tracked_render_pass(
                     as sys::ATTACHMENT_STORE_OP,
                 InitialState: sys::_RESOURCE_STATE::RESOURCE_STATE_RESOLVE_DEST
                     as sys::RESOURCE_STATE,
-                FinalState: sys::_RESOURCE_STATE::RESOURCE_STATE_RESOLVE_DEST as sys::RESOURCE_STATE,
+                FinalState: sys::_RESOURCE_STATE::RESOURCE_STATE_RESOLVE_DEST
+                    as sys::RESOURCE_STATE,
             });
             key_attachments.push(PassAttachmentKey {
                 format: resolve_format as i32,
@@ -913,8 +1003,8 @@ pub(crate) fn begin_tracked_render_pass(
         // read-only-DSV optimization that allows SRV-sampling the aspect in
         // the same pass. Bevy's current mixed uses are on depth-only
         // formats, where wgpu on D3D12 also produces a plain writable DSV).
-        let fully_read_only = depth_stencil.depth_ops.is_none()
-            && depth_stencil.stencil_ops.is_none();
+        let fully_read_only =
+            depth_stencil.depth_ops.is_none() && depth_stencil.stencil_ops.is_none();
         let attachment_state = depth_stencil_attachment_state(
             depth_stencil.depth_ops.is_none(),
             depth_stencil.stencil_ops.is_none(),
@@ -923,10 +1013,8 @@ pub(crate) fn begin_tracked_render_pass(
         // LOAD/STORE (wgpu's None ops are NO_ACCESS - preserve semantics).
         let (depth_load, depth_store) = if fully_read_only {
             (
-                sys::_ATTACHMENT_LOAD_OP::ATTACHMENT_LOAD_OP_LOAD
-                    as sys::ATTACHMENT_LOAD_OP,
-                sys::_ATTACHMENT_STORE_OP::ATTACHMENT_STORE_OP_STORE
-                    as sys::ATTACHMENT_STORE_OP,
+                sys::_ATTACHMENT_LOAD_OP::ATTACHMENT_LOAD_OP_LOAD as sys::ATTACHMENT_LOAD_OP,
+                sys::_ATTACHMENT_STORE_OP::ATTACHMENT_STORE_OP_STORE as sys::ATTACHMENT_STORE_OP,
             )
         } else {
             (depth_load, depth_store)
@@ -957,33 +1045,42 @@ pub(crate) fn begin_tracked_render_pass(
     }
 
     if attachments.is_empty() {
-        return Err("render pass has no attachments (the engine cannot derive a framebuffer size)"
-            .into());
-    }
+        return Err(
+            "render pass has no attachments (the engine cannot derive a framebuffer size)".into(),
+        );
+    };
 
     let key = PassCacheKey {
         attachments: key_attachments,
         views: resolved_view_keys(&framebuffer_views),
     };
-    let (render_pass, framebuffer) = if let Some(entry) = cache.entries.iter().find(|e| e.key == key)
-    {
-        (entry.render_pass.as_ptr(), entry.framebuffer.as_ptr())
-    } else {
-        cache.prepare_insert();
-        let render_pass =
-            create_render_pass(device, descriptor.label, &attachments, &color_refs, &resolve_refs, depth_ref.as_ref())?;
-        let framebuffer = create_framebuffer(device, descriptor.label, render_pass.as_ptr(), &framebuffer_views)?;
-        cache.entries.push(RenderPassEntry {
-            key,
-            render_pass,
-            framebuffer,
-        });
-        let entry = cache
-            .entries
-            .last()
-            .expect("entry pushed above");
-        (entry.render_pass.as_ptr(), entry.framebuffer.as_ptr())
-    };
+    let (render_pass, framebuffer) =
+        if let Some(entry) = cache.entries.iter().find(|e| e.key == key) {
+            (entry.render_pass.as_ptr(), entry.framebuffer.as_ptr())
+        } else {
+            cache.prepare_insert();
+            let render_pass = create_render_pass(
+                device,
+                descriptor.label,
+                &attachments,
+                &color_refs,
+                &resolve_refs,
+                depth_ref.as_ref(),
+            )?;
+            let framebuffer = create_framebuffer(
+                device,
+                descriptor.label,
+                render_pass.as_ptr(),
+                &framebuffer_views,
+            )?;
+            cache.entries.push(RenderPassEntry {
+                key,
+                render_pass,
+                framebuffer,
+            });
+            let entry = cache.entries.last().expect("entry pushed above");
+            (entry.render_pass.as_ptr(), entry.framebuffer.as_ptr())
+        };
 
     // Build the clear values: one per dense attachment, in attachment-index
     // order (resolve attachments get a default DISCARD entry - the engine
@@ -1012,7 +1109,12 @@ pub(crate) fn begin_tracked_render_pass(
             },
         };
         if let wgpu_types::LoadOp::Clear(color) = attachment.ops.load {
-            clear.Color = [color.r as f32, color.g as f32, color.b as f32, color.a as f32];
+            clear.Color = [
+                color.r as f32,
+                color.g as f32,
+                color.b as f32,
+                color.a as f32,
+            ];
         }
         clear_values.push(clear);
     }
@@ -1039,6 +1141,11 @@ pub(crate) fn begin_tracked_render_pass(
         clear_values.push(clear);
     }
 
+    // SAFETY: `BeginRenderPassAttribs` is a plain-old-data FFI aggregate (two
+    // interface pointers, a clear-value pointer plus its count, and at
+    // transition-mode enum). All-zero is a valid "no pass, no clears" value and
+    // every field - pRenderPass, pFramebuffer, ClearValueCount, pClearValues
+    // and StateTransitionMode - is assigned below before the engine call.
     let mut attribs: sys::BeginRenderPassAttribs = unsafe { std::mem::zeroed() };
     attribs.pRenderPass = render_pass;
     attribs.pFramebuffer = framebuffer;

@@ -1,10 +1,10 @@
 use crate::{
     diagnostic::internal::{Pass, PassKind, WritePipelineStatistics, WriteTimestamp},
+    render_resource::wgpu_compat::QuerySet,
     render_resource::{
         BindGroup, BindGroupId, Buffer, BufferId, BufferSlice, IndexFormat, RenderPipeline,
         RenderPipelineId,
     },
-    render_resource::wgpu_compat::QuerySet,
     renderer::{diligent_draw, diligent_registry::registry, RenderDevice},
 };
 use bevy_camera::Viewport;
@@ -128,7 +128,6 @@ enum TrackedRenderPassInner<'a> {
     Empty,
 }
 
-
 /// A [`RenderPass`], which tracks the current pipeline state to skip redundant operations.
 ///
 /// It is used to set the current [`RenderPipeline`], [`BindGroup`]s and [`Buffer`]s.
@@ -145,10 +144,7 @@ pub struct TrackedRenderPass<'a> {
 impl<'a> TrackedRenderPass<'a> {
     /// Tracks a pass that was begun on the Diligent immediate context
     /// (M1-3; `BeginRenderPass` was already issued by the caller).
-    pub fn diligent(
-        device: &RenderDevice,
-        context: &'a diligent_rs::DeviceContext,
-    ) -> Self {
+    pub fn diligent(device: &RenderDevice, context: &'a diligent_rs::DeviceContext) -> Self {
         let limits = device.limits();
         let max_bind_groups = limits.max_bind_groups as usize;
         let max_vertex_buffers = limits.max_vertex_buffers as usize;
@@ -188,9 +184,7 @@ impl<'a> TrackedRenderPass<'a> {
     fn poison(&mut self, reason: &str) {
         if let TrackedRenderPassInner::Diligent { poisoned, .. } = &mut self.inner {
             if !*poisoned {
-                bevy_log::debug!(
-                    "diligent: render pass degraded, draws will be skipped: {reason}"
-                );
+                bevy_log::debug!("diligent: render pass degraded, draws will be skipped: {reason}");
             }
             *poisoned = true;
         }
@@ -232,10 +226,7 @@ impl<'a> TrackedRenderPass<'a> {
                         }
                     }
                     None => {
-                        self.poison(&format!(
-                            "pipeline {:?} has no diligent PSO",
-                            pipeline.id()
-                        ));
+                        self.poison(&format!("pipeline {:?} has no diligent PSO", pipeline.id()));
                     }
                 }
             }
@@ -310,8 +301,7 @@ impl<'a> TrackedRenderPass<'a> {
                             // offset set + commit pair is atomic across
                             // threads that share the SRB.
                             let outcome = (|| -> Result<(), String> {
-                                let _guard =
-                                    crate::renderer::diligent_registry::context_guard();
+                                let _guard = crate::renderer::diligent_registry::context_guard();
                                 // M2a-1 review, fix 2: `apply_dynamic_offsets`
                                 // runs unconditionally - with a layout that
                                 // declares dynamic bindings and an empty
@@ -328,9 +318,7 @@ impl<'a> TrackedRenderPass<'a> {
                             })();
                             if let Err(err) = outcome {
                                 bevy_log::warn!("diligent: dynamic offsets: {err}");
-                                self.poison(
-                                    "dynamic offset application failed; SRB not committed",
-                                );
+                                self.poison("dynamic offset application failed; SRB not committed");
                                 return;
                             }
                         }
@@ -1146,6 +1134,9 @@ pub(crate) fn set_vertex_buffer_slot(
     // call - the guard must cover the whole engine invocation (no locked
     // path is active here: the pass-record callers take no guard).
     let _guard = crate::renderer::diligent_registry::context_guard();
+    // SAFETY: `context` is a live `diligent_rs::DeviceContext` wrapper, so its
+    // raw pointer is non-null and carries a valid vtable; the slot is checked
+    // with `as_ref().expect(..)` (the engine always implements it).
     let set = unsafe {
         (*(*context.as_raw()).pVtbl)
             .DeviceContext

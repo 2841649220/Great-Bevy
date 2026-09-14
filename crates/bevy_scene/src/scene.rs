@@ -242,7 +242,7 @@ where
         self,
         context: &mut ResolveContext,
         scenes: &mut Vec<ResolvedScene>,
-    ) -> std::prelude::v1::Result<(), ResolveSceneError> {
+    ) -> core::prelude::v1::Result<(), ResolveSceneError> {
         self.map(|scene_list| scene_list.resolve_list(context, scenes))
             .unwrap_or(Ok(()))
     }
@@ -272,8 +272,8 @@ where
 /// struct Position {
 ///     x: usize,
 ///     y: usize,
+/// });
 /// }
-///
 /// let patch = Position::patch(|position_template, context| {
 ///     position_template.x = 10;
 /// });

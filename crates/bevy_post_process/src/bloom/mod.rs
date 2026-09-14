@@ -235,7 +235,7 @@ pub fn bloom(
             mip as f32,
             (bloom_texture.mip_count - 1) as f32,
         );
-        upsampling_pass.set_blend_constant(LinearRgba::gray(blend).into());
+        upsampling_pass.set_blend_constant(LinearRgba::gray(blend));
         upsampling_pass.draw(0..3, 0..1);
     }
 
@@ -266,7 +266,7 @@ pub fn bloom(
             );
         }
         let blend = compute_blend_factor(bloom_settings, 0.0, (bloom_texture.mip_count - 1) as f32);
-        upsampling_final_pass.set_blend_constant(LinearRgba::gray(blend).into());
+        upsampling_final_pass.set_blend_constant(LinearRgba::gray(blend));
         upsampling_final_pass.draw(0..3, 0..1);
     }
 

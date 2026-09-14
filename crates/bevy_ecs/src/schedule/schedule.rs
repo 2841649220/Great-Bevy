@@ -203,14 +203,17 @@ impl Schedules {
 
     /// Prints the names of the components and resources with [`info`]
     ///
-    /// May panic or retrieve incorrect names if [`Components`] is not from the same
-    /// world
+    /// May retrieve incorrect names if [`Components`] is not from the same world.
     pub fn print_ignored_ambiguities(&self, components: &Components) {
         let mut message =
             "System order ambiguities caused by conflicts on the following types are ignored:\n"
                 .to_string();
         for id in self.iter_ignored_ambiguities() {
-            writeln!(message, "{}", components.get_name(*id).unwrap()).unwrap();
+            if let Some(name) = components.get_name(*id) {
+                writeln!(message, "{name}").unwrap();
+            } else {
+                writeln!(message, "<unknown component {id:?}>").unwrap();
+            }
         }
 
         info!("{message}");
@@ -2707,5 +2710,19 @@ mod tests {
                 TypeId::of::<Pass<2>>()
             ]
         );
+    }
+
+    #[test]
+    fn test_print_ignored_ambiguities_with_unregistered_component() {
+        use crate::component::{ComponentId, Components};
+
+        let mut schedules = Schedules::default();
+        schedules
+            .ignored_scheduling_ambiguities
+            .insert(ComponentId::new(999_999));
+
+        let components = Components::default();
+        // Should not panic on None
+        schedules.print_ignored_ambiguities(&components);
     }
 }

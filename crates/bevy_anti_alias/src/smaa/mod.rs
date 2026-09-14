@@ -84,8 +84,8 @@ pub struct SmaaPlugin;
 #[derive(Clone, Copy, Default, Component, Reflect, ExtractComponent)]
 #[reflect(Component, Default, Clone)]
 #[extract_component_sync_target((
-	Self,
-	SmaaTextures,
+    Self,
+    SmaaTextures,
     SmaaPipelines,
     SmaaBindGroups,
     ViewSmaaPipelines,

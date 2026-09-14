@@ -964,4 +964,40 @@ mod tests {
 
         assert_eq!(count.load(Ordering::Acquire), 1);
     }
+
+    #[test]
+    fn panic_in_scope_cancels_tasks_instead_of_awaiting_them() {
+        use core::sync::atomic::AtomicUsize;
+
+        let pool = TaskPool::new();
+        let started = Arc::new(AtomicUsize::new(0));
+        let finished = Arc::new(AtomicUsize::new(0));
+
+        let result = std::panic::catch_unwind(AssertUnwindSafe(|| {
+            let started = started.clone();
+            let finished = finished.clone();
+            pool.scope(|scope| {
+                // A task that never becomes ready: cancelling it releases the data it borrowed,
+                // while *awaiting* it would block the unwinding thread forever. This keeps the
+                // scope's panic path from turning a panic into a hang.
+                scope.spawn(async move {
+                    started.fetch_add(1, Ordering::SeqCst);
+                    crate::futures_lite::future::pending::<()>().await;
+                    finished.fetch_add(1, Ordering::SeqCst);
+                });
+                panic!("intentional panic inside scope closure");
+            });
+        }));
+
+        assert!(result.is_err(), "the scope panic must propagate to the caller");
+        assert!(
+            started.load(Ordering::SeqCst) <= 1,
+            "the spawned task must not be polled after the scope has been torn down"
+        );
+        assert_eq!(
+            finished.load(Ordering::SeqCst),
+            0,
+            "cancelled tasks must not run to completion after the scope unwinds"
+        );
+    }
 }

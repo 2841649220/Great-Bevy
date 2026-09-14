@@ -48,6 +48,11 @@ pub(crate) struct DiligentHandle<T>(pub(crate) Arc<T>);
 // objects (resources, device, PSO/SRB/PRS) and for the single-context
 // discipline of the immediate device context.
 unsafe impl<T> Send for DiligentHandle<T> {}
+// SAFETY: the same deliberate opt-in as the `Send` impl above: the wrapped
+// engine objects are ref-counted and thread-safe, and `&DiligentHandle` only
+// hands out `&T` / `Arc` clones - the one non-thread-safe object (the
+// immediate `DeviceContext`) stays confined to the render thread, as the
+// struct docs describe.
 unsafe impl<T> Sync for DiligentHandle<T> {}
 
 impl<T> Clone for DiligentHandle<T> {
@@ -82,47 +87,79 @@ pub(crate) struct ResourceRegistry {
 // pointers are non-owning and the pointed-to objects are kept alive by the
 // wrapper `Arc`s that registered them (see the module docs).
 unsafe impl Send for ResourceRegistry {}
+// SAFETY: same invariant as the `Send` impl above: every map is behind its
+// own `Mutex`, so shared access only ever touches guarded state, and the
+// stored raw pointers are non-owning - the pointed-to engine objects are kept
+// alive by the wrapper `Arc`s that registered them (see the module docs).
 unsafe impl Sync for ResourceRegistry {}
 
 impl ResourceRegistry {
     pub(crate) fn register_buffer(&self, id: BufferId, buffer: *mut sys::IBuffer) {
         if !buffer.is_null() {
-            self.buffers.lock().unwrap().insert(u32::from(core::num::NonZero::<u32>::from(id)), buffer);
+            self.buffers
+                .lock()
+                .unwrap()
+                .insert(u32::from(core::num::NonZero::<u32>::from(id)), buffer);
         }
     }
 
     pub(crate) fn register_texture(&self, id: TextureId, texture: *mut sys::ITexture) {
         if !texture.is_null() {
-            self.textures.lock().unwrap().insert(u32::from(core::num::NonZero::<u32>::from(id)), texture);
+            self.textures
+                .lock()
+                .unwrap()
+                .insert(u32::from(core::num::NonZero::<u32>::from(id)), texture);
         }
     }
 
     pub(crate) fn register_texture_view(&self, id: TextureViewId, view: *mut sys::ITextureView) {
         if !view.is_null() {
-            self.texture_views.lock().unwrap().insert(u32::from(core::num::NonZero::<u32>::from(id)), view);
+            self.texture_views
+                .lock()
+                .unwrap()
+                .insert(u32::from(core::num::NonZero::<u32>::from(id)), view);
         }
     }
 
     pub(crate) fn register_sampler(&self, id: SamplerId, sampler: *mut sys::ISampler) {
         if !sampler.is_null() {
-            self.samplers.lock().unwrap().insert(u32::from(core::num::NonZero::<u32>::from(id)), sampler);
+            self.samplers
+                .lock()
+                .unwrap()
+                .insert(u32::from(core::num::NonZero::<u32>::from(id)), sampler);
         }
     }
 
     pub(crate) fn resolve_buffer(&self, id: BufferId) -> Option<*mut sys::IBuffer> {
-        self.buffers.lock().unwrap().get(&u32::from(core::num::NonZero::<u32>::from(id))).copied()
+        self.buffers
+            .lock()
+            .unwrap()
+            .get(&u32::from(core::num::NonZero::<u32>::from(id)))
+            .copied()
     }
 
     pub(crate) fn resolve_texture(&self, id: TextureId) -> Option<*mut sys::ITexture> {
-        self.textures.lock().unwrap().get(&u32::from(core::num::NonZero::<u32>::from(id))).copied()
+        self.textures
+            .lock()
+            .unwrap()
+            .get(&u32::from(core::num::NonZero::<u32>::from(id)))
+            .copied()
     }
 
     pub(crate) fn resolve_texture_view(&self, id: TextureViewId) -> Option<*mut sys::ITextureView> {
-        self.texture_views.lock().unwrap().get(&u32::from(core::num::NonZero::<u32>::from(id))).copied()
+        self.texture_views
+            .lock()
+            .unwrap()
+            .get(&u32::from(core::num::NonZero::<u32>::from(id)))
+            .copied()
     }
 
     pub(crate) fn resolve_sampler(&self, id: SamplerId) -> Option<*mut sys::ISampler> {
-        self.samplers.lock().unwrap().get(&u32::from(core::num::NonZero::<u32>::from(id))).copied()
+        self.samplers
+            .lock()
+            .unwrap()
+            .get(&u32::from(core::num::NonZero::<u32>::from(id)))
+            .copied()
     }
 }
 

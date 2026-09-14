@@ -35,26 +35,13 @@ use bevy_math::Vec3;
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Primitive {
     /// Sphere centered at `center` with radius `radius`.
-    Sphere {
-        center: Vec3,
-        radius: f32,
-    },
+    Sphere { center: Vec3, radius: f32 },
     /// Axis-aligned box with `half_extents` centered at `center`.
-    Box {
-        center: Vec3,
-        half_extents: Vec3,
-    },
+    Box { center: Vec3, half_extents: Vec3 },
     /// Infinite plane `x * normal + distance = 0`.
-    Plane {
-        normal: Vec3,
-        distance: f32,
-    },
+    Plane { normal: Vec3, distance: f32 },
     /// Capsule between `a` and `b` with `radius`.
-    Capsule {
-        a: Vec3,
-        b: Vec3,
-        radius: f32,
-    },
+    Capsule { a: Vec3, b: Vec3, radius: f32 },
 }
 
 impl Primitive {
@@ -63,7 +50,10 @@ impl Primitive {
     pub fn distance(&self, p: Vec3) -> f32 {
         match *self {
             Self::Sphere { center, radius } => (p - center).length() - radius,
-            Self::Box { center, half_extents } => {
+            Self::Box {
+                center,
+                half_extents,
+            } => {
                 let q = (p - center).abs() - half_extents;
                 q.max(Vec3::ZERO).length() + q.min(Vec3::ZERO).max_element()
             }
@@ -120,9 +110,8 @@ impl SceneSdf {
         cell_size: f32,
         primitives: &[Primitive],
     ) -> Self {
-        let mut samples = Vec::with_capacity(
-            (size[0] as usize) * (size[1] as usize) * (size[2] as usize),
-        );
+        let mut samples =
+            Vec::with_capacity((size[0] as usize) * (size[1] as usize) * (size[2] as usize));
         for z in 0..size[2] {
             for y in 0..size[1] {
                 for x in 0..size[0] {
@@ -369,8 +358,14 @@ mod tests {
             center: Vec3::ZERO,
             radius: 1.0,
         };
-        assert!((s.distance(Vec3::ZERO) - (-1.0)).abs() < 1e-5, "inside negative");
-        assert!((s.distance(Vec3::X * 2.0) - 1.0).abs() < 1e-5, "outside positive");
+        assert!(
+            (s.distance(Vec3::ZERO) - (-1.0)).abs() < 1e-5,
+            "inside negative"
+        );
+        assert!(
+            (s.distance(Vec3::X * 2.0) - 1.0).abs() < 1e-5,
+            "outside positive"
+        );
         assert!(s.distance(Vec3::X).abs() < 1e-5, "surface zero");
     }
 
@@ -474,7 +469,10 @@ mod tests {
         assert!((0.0..=1.0).contains(&ao), "AO in [0,1] (got {ao})");
         // Soft shadow toward +X from an open point is lit (>0).
         let shadow = soft_shadow(&sdf, Vec3::new(0.0, 1.2, 0.0), Vec3::X, 10.0, 8.0, 16);
-        assert!((0.0..=1.0).contains(&shadow), "shadow in [0,1] (got {shadow})");
+        assert!(
+            (0.0..=1.0).contains(&shadow),
+            "shadow in [0,1] (got {shadow})"
+        );
     }
 
     #[test]

@@ -17,7 +17,7 @@
 //! This crate ships the CPU reference of the math (`sdf.rs`, unit-tested
 //! without a GPU) and the compute-pipeline skeleton. The GPU passes are
 //! wired into the render schedule when a device with compute support is
-//! present; full visual validation happens on real hardware (Android no-RT
+//! present; full visual validation happens on real hardware (Android no-Rt
 //! devices are first-class, spec §5.10.4).
 
 use bevy_app::{App, Plugin};
@@ -60,9 +60,7 @@ impl Plugin for SdfGiPlugin {
             .features()
             .contains(crate::SolariPlugins::required_wgpu_features())
         {
-            warn!(
-                "SdfGiPlugin not loaded. GPU lacks support for required features."
-            );
+            warn!("SdfGiPlugin not loaded. GPU lacks support for required features.");
             return;
         }
 

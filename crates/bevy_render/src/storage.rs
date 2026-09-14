@@ -1,3 +1,4 @@
+use crate::render_resource::{BufferDescriptor, BufferInitDescriptor};
 use crate::{
     render_asset::{AssetExtractionError, PrepareAssetError, RenderAsset, RenderAssetPlugin},
     render_resource::{Buffer, BufferUsages},
@@ -9,7 +10,6 @@ use bevy_ecs::system::{lifetimeless::SRes, SystemParamItem};
 use bevy_reflect::{prelude::ReflectDefault, Reflect};
 use bevy_utils::default;
 use encase::{internal::WriteInto, ShaderType};
-use crate::render_resource::{BufferDescriptor, BufferInitDescriptor};
 
 /// Adds [`ShaderBuffer`] as an asset that is extracted and uploaded to the GPU.
 #[derive(Default)]
@@ -209,10 +209,11 @@ impl RenderAsset for GpuShaderBuffer {
                     .buffer_description
                     .size
                     .min(previous.buffer_descriptor.size);
-                let mut encoder =
-                    render_device.create_command_encoder(&crate::render_resource::CommandEncoderDescriptor {
+                let mut encoder = render_device.create_command_encoder(
+                    &crate::render_resource::CommandEncoderDescriptor {
                         label: Some("copy_buffer_on_resize"),
-                    });
+                    },
+                );
                 encoder.copy_buffer_to_buffer(&previous.buffer, 0, &new_buffer, 0, copy_size);
                 render_queue.submit([encoder.finish()]);
             }

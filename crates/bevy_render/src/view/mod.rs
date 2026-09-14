@@ -9,6 +9,8 @@ use bevy_diagnostic::FrameCount;
 pub use visibility::*;
 pub use window::*;
 
+use crate::render_resource::TextureDescriptor;
+use crate::render_resource::{RenderPassColorAttachment, RenderPassDepthStencilAttachment};
 use crate::{
     camera::{ExtractedCamera, MipBias, NormalizedRenderTargetExt as _, TemporalJitter},
     extract_component::ExtractComponentPlugin,
@@ -40,8 +42,6 @@ use core::{
     ops::Range,
     sync::atomic::{AtomicUsize, Ordering},
 };
-use crate::render_resource::{RenderPassColorAttachment, RenderPassDepthStencilAttachment};
-use crate::render_resource::TextureDescriptor;
 use wgpu_types::{
     BufferUsages, Color as WgpuColor, StoreOp, TextureDimension, TextureFormat, TextureUsages,
 };

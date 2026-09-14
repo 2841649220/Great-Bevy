@@ -191,11 +191,17 @@ struct SurfaceConfiguration {
     /// TODO-REMOVE-M1-4: the locked `ISwapChain` has no alpha-mode control
     /// (the M1-1 wrapper's swap-chain descriptor fixes the surface
     /// properties); kept for the wgpu field-name compatibility.
-    #[expect(dead_code, reason = "TODO-REMOVE-M1-4: no swap-chain alpha-mode control")]
+    #[expect(
+        dead_code,
+        reason = "TODO-REMOVE-M1-4: no swap-chain alpha-mode control"
+    )]
     pub alpha_mode: CompositeAlphaMode,
     /// TODO-REMOVE-M1-4: the locked `ISwapChain` cannot expose alternative
     /// view formats; kept for the wgpu field-name compatibility.
-    #[expect(dead_code, reason = "TODO-REMOVE-M1-4: no swap-chain view-format alternatives")]
+    #[expect(
+        dead_code,
+        reason = "TODO-REMOVE-M1-4: no swap-chain view-format alternatives"
+    )]
     pub view_formats: Vec<TextureFormat>,
 }
 
@@ -322,7 +328,8 @@ pub fn prepare_windows(
             continue;
         };
         let view = surface_data.swap_chain_texture_view.clone();
-        crate::renderer::diligent_registry::registry().register_texture_view(view.id(), rtv.as_ptr());
+        crate::renderer::diligent_registry::registry()
+            .register_texture_view(view.id(), rtv.as_ptr());
         window.set_swapchain_texture(view);
         window.swap_chain_texture_view_format = Some(
             surface_data
@@ -384,7 +391,7 @@ pub fn create_surfaces(
         if window.size_changed || window.present_mode_changed {
             // normally this is dropped on present but we double check here to be safe as failure to
             // drop it will cause validation errors in wgpu
-                #[cfg_attr(
+            #[cfg_attr(
                 target_arch = "wasm32",
                 expect(clippy::drop_non_drop, reason = "texture views are not drop on wasm")
             )]
@@ -416,7 +423,10 @@ pub fn create_surfaces(
 /// Returns `None` (with a warning) when the diligent device/factory is
 /// unavailable or the window handle is not a Win32 window (the M1 target is
 /// D3D12/Windows - TODO-REMOVE-M1-4).
-fn create_surface_data(render_device: &RenderDevice, window: &ExtractedWindow) -> Option<SurfaceData> {
+fn create_surface_data(
+    render_device: &RenderDevice,
+    window: &ExtractedWindow,
+) -> Option<SurfaceData> {
     let factory = render_device.engine_factory()?;
     let device = render_device.diligent_device()?;
     let context = render_device.diligent_context()?;
@@ -481,9 +491,7 @@ fn create_surface_data(render_device: &RenderDevice, window: &ExtractedWindow) -
 /// The Win32 HWND of a window, when the window is a Win32 window.
 fn window_hwnd(handle: &RawHandleWrapper) -> Option<*mut c_void> {
     match handle.get_window_handle() {
-        raw_window_handle::RawWindowHandle::Win32(win32) => {
-            Some(win32.hwnd.get() as *mut c_void)
-        }
+        raw_window_handle::RawWindowHandle::Win32(win32) => Some(win32.hwnd.get() as *mut c_void),
         _ => {
             warn!(
                 "diligent: swap chains are only supported for Win32 windows so far; \

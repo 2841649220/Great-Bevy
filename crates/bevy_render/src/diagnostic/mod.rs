@@ -9,6 +9,7 @@ mod render_asset_diagnostic_plugin;
 #[cfg(feature = "tracing-tracy")]
 mod tracy_gpu;
 
+use crate::render_resource::{BufferSlice, CommandEncoder};
 use alloc::{borrow::Cow, sync::Arc};
 use bevy_ecs::{
     schedule::IntoScheduleConfigs,
@@ -16,7 +17,6 @@ use bevy_ecs::{
     world::{FromWorld, World},
 };
 use core::marker::PhantomData;
-use crate::render_resource::{BufferSlice, CommandEncoder};
 
 use bevy_app::{App, Plugin, PreUpdate};
 
@@ -111,8 +111,8 @@ pub fn resolve_encoder(
     render_device: Res<RenderDevice>,
     mut pending_buffers: ResMut<PendingCommandBuffers>,
 ) {
-    let mut encoder =
-        render_device.create_command_encoder(&crate::render_resource::CommandEncoderDescriptor::default());
+    let mut encoder = render_device
+        .create_command_encoder(&crate::render_resource::CommandEncoderDescriptor::default());
     recorder.resolve(&mut encoder);
     pending_buffers.push_encoder(encoder);
 }

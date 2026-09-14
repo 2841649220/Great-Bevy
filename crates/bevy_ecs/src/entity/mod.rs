@@ -219,7 +219,12 @@ impl SparseSetIndex for EntityIndex {
 
     #[inline]
     fn get_sparse_set_index(value: usize) -> Self {
-        Self::from_bits(value as u32)
+        // A checked conversion is used instead of `value as u32`, which would silently truncate
+        // on 64-bit targets (e.g. `1 << 32` would be mapped to index `0`).
+        let index = u32::try_from(value)
+            .expect("Sparse set index must fit in a u32 and must not be u32::MAX");
+        Self::from_raw_u32(index)
+            .expect("Sparse set index must fit in a u32 and must not be u32::MAX")
     }
 }
 
@@ -692,7 +697,11 @@ impl SparseSetIndex for Entity {
 
     #[inline]
     fn get_sparse_set_index(value: usize) -> Self {
-        Entity::from_index(EntityIndex::get_sparse_set_index(value))
+        // See `EntityIndex::get_sparse_set_index` for why the conversion is checked.
+        let index = u32::try_from(value)
+            .expect("Sparse set index must fit in a u32 and must not be u32::MAX");
+        Self::from_raw_u32(index)
+            .expect("Sparse set index must fit in a u32 and must not be u32::MAX")
     }
 }
 
@@ -1519,5 +1528,95 @@ mod tests {
         entities.sort();
         entities.dedup();
         assert_eq!(pre_len, entities.len());
+    }
+
+    #[test]
+    fn test_entity_and_entity_index_sparse_set_index() {
+        assert_eq!(EntityIndex::get_sparse_set_index(0).sparse_set_index(), 0);
+        assert_eq!(EntityIndex::get_sparse_set_index(1).sparse_set_index(), 1);
+        assert_eq!(Entity::get_sparse_set_index(0).sparse_set_index(), 0);
+        assert_eq!(Entity::get_sparse_set_index(1).sparse_set_index(), 1);
+        for i in 0..100 {
+            assert_eq!(EntityIndex::get_sparse_set_index(i).sparse_set_index(), i);
+            assert_eq!(Entity::get_sparse_set_index(i).sparse_set_index(), i);
+        }
+    }
+
+    #[test]
+    fn test_entity_and_entity_index_sparse_set_index_boundaries_and_inverted_bits() {
+        // 1. Index 0
+        let idx0 = EntityIndex::get_sparse_set_index(0);
+        assert_eq!(idx0.sparse_set_index(), 0);
+        assert_eq!(idx0.index(), 0);
+        let e0 = Entity::get_sparse_set_index(0);
+        assert_eq!(e0.sparse_set_index(), 0);
+        assert_eq!(e0.index(), idx0);
+        assert_eq!(e0.index_u32(), 0);
+
+        // 2. Index 1
+        let idx1 = EntityIndex::get_sparse_set_index(1);
+        assert_eq!(idx1.sparse_set_index(), 1);
+        assert_eq!(idx1.index(), 1);
+        let e1 = Entity::get_sparse_set_index(1);
+        assert_eq!(e1.sparse_set_index(), 1);
+        assert_eq!(e1.index(), idx1);
+        assert_eq!(e1.index_u32(), 1);
+
+        // 3. Index u32::MAX - 1 (0xFFFF_FFFE)
+        let max_valid = (u32::MAX - 1) as usize;
+        let idx_max = EntityIndex::get_sparse_set_index(max_valid);
+        assert_eq!(idx_max.sparse_set_index(), max_valid);
+        assert_eq!(idx_max.index(), u32::MAX - 1);
+        let e_max = Entity::get_sparse_set_index(max_valid);
+        assert_eq!(e_max.sparse_set_index(), max_valid);
+        assert_eq!(e_max.index_u32(), u32::MAX - 1);
+
+        // 4. Index u32::MAX must return None via from_raw_u32 and panic cleanly via get_sparse_set_index
+        assert_eq!(EntityIndex::from_raw_u32(u32::MAX), None);
+        assert_eq!(Entity::from_raw_u32(u32::MAX), None);
+
+        let panic_idx =
+            std::panic::catch_unwind(|| EntityIndex::get_sparse_set_index(u32::MAX as usize));
+        assert!(
+            panic_idx.is_err(),
+            "EntityIndex::get_sparse_set_index(u32::MAX) must panic cleanly"
+        );
+
+        let panic_e = std::panic::catch_unwind(|| Entity::get_sparse_set_index(u32::MAX as usize));
+        assert!(
+            panic_e.is_err(),
+            "Entity::get_sparse_set_index(u32::MAX) must panic cleanly"
+        );
+
+        // 5. Inverted bits properties & bitwise representation analysis:
+        // EntityIndex::to_bits() returns underlying NonMaxU32 bits.
+        // For index 0, underlying NonMaxU32 is non-zero (specifically !0 = 0xFFFF_FFFF).
+        assert_ne!(idx0.to_bits(), 0);
+        // EntityIndex::from_bits with 0 must fail/panic cleanly because 0 is not a valid NonMaxU32 representation
+        assert_eq!(EntityIndex::try_from_bits(0), None);
+        let panic_from_bits_0 = std::panic::catch_unwind(|| EntityIndex::from_bits(0));
+        assert!(
+            panic_from_bits_0.is_err(),
+            "EntityIndex::from_bits(0) must panic cleanly"
+        );
+
+        // Roundtrip to_bits / from_bits for valid instances
+        assert_eq!(EntityIndex::from_bits(idx0.to_bits()), idx0);
+        assert_eq!(EntityIndex::from_bits(idx1.to_bits()), idx1);
+        assert_eq!(EntityIndex::from_bits(idx_max.to_bits()), idx_max);
+
+        assert_eq!(Entity::from_bits(e0.to_bits()), e0);
+        assert_eq!(Entity::from_bits(e1.to_bits()), e1);
+        assert_eq!(Entity::from_bits(e_max.to_bits()), e_max);
+
+        // Prove the old bug: from_bits(1) produced inverted index !1 (0xFFFF_FFFE) instead of 1
+        let inverted_e = EntityIndex::from_bits(1);
+        assert_eq!(inverted_e.index(), !1u32);
+
+        // Verification of invariant: get_sparse_set_index(v).sparse_set_index() == v for multiple values
+        for v in [0, 1, 2, 7, 42, 255, 65535, 1_000_000, 10_000_000, max_valid] {
+            assert_eq!(EntityIndex::get_sparse_set_index(v).sparse_set_index(), v);
+            assert_eq!(Entity::get_sparse_set_index(v).sparse_set_index(), v);
+        }
     }
 }

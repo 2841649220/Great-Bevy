@@ -86,7 +86,7 @@ impl CachedPipelineState {
 
 type ImmediateSize = u32;
 type LayoutCacheKey = (Vec<BindGroupLayoutId>, ImmediateSize, [usize; 2]);
-/// The `LayoutCache` value: the "PRS 数组 + immediate_size" combination
+/// The `LayoutCache` value: the "PRS array + immediate_size" combination
 /// record (brief §5.3.3-3/4). The cache key additionally carries the shader
 /// module identities: the PSO-side PRS resources are named after the shader
 /// variables (V15 report), so identical bind group layouts with different
@@ -116,10 +116,7 @@ impl LayoutCache {
                 // The pipeline layout handle the descriptors reference (the
                 // M1-4b-2 replacement for the transition wgpu layout; the
                 // diligent PRS array is the real state below).
-                let bind_group_layouts = bind_group_layouts
-                    .iter()
-                    .map(Some)
-                    .collect::<Vec<_>>();
+                let bind_group_layouts = bind_group_layouts.iter().map(Some).collect::<Vec<_>>();
                 let layout = render_device.create_pipeline_layout(&PipelineLayoutDescriptor {
                     bind_group_layouts: &bind_group_layouts,
                     immediate_size,
@@ -149,23 +146,26 @@ impl LayoutCache {
                             &shader_names,
                         ) {
                             Ok(signature) => prs.push(signature),
-                            Err(err) => bevy_log::warn!(
-                                "diligent: PSO-side PRS for group {group}: {err}"
-                            ),
+                            Err(err) => {
+                                bevy_log::warn!("diligent: PSO-side PRS for group {group}: {err}")
+                            }
                         }
                     }
                     let modules: Vec<Option<&naga::Module>> = shader_modules
                         .iter()
                         .map(|module| module.naga_module())
                         .collect();
-                    let immediate_prs =
-                        match diligent_pso::create_immediate_prs(device, &modules, immediate_size) {
-                            Ok(signature) => signature,
-                            Err(err) => {
-                                bevy_log::warn!("diligent: immediate PRS: {err}");
-                                None
-                            }
-                        };
+                    let immediate_prs = match diligent_pso::create_immediate_prs(
+                        device,
+                        &modules,
+                        immediate_size,
+                    ) {
+                        Ok(signature) => signature,
+                        Err(err) => {
+                            bevy_log::warn!("diligent: immediate PRS: {err}");
+                            None
+                        }
+                    };
                     let immediate_name = diligent_pso::immediate_global_name(&modules)
                         .and_then(|name| CString::new(name).ok());
                     let immediate_probe_stages = diligent_pso::immediate_prs_stages(&modules);
@@ -629,7 +629,9 @@ impl PipelineCache {
                     multiview_mask: None,
                     depth_stencil: descriptor.depth_stencil.clone(),
                     label: descriptor.label.as_deref(),
-                    layout: layout.as_ref().map(|layout| -> &PipelineLayout { &layout.layout }),
+                    layout: layout
+                        .as_ref()
+                        .map(|layout| -> &PipelineLayout { &layout.layout }),
                     multisample: descriptor.multisample,
                     primitive: descriptor.primitive,
                     vertex: RawVertexState {
@@ -663,10 +665,8 @@ impl PipelineCache {
                     // immediately, so the poll exits on the first iteration.
                     // The synchronous_pipeline_compilation switch keeps the
                     // sync path as the fallback.
-                    if device.diligent_backend() != DiligentBackend::Other && !self_sync
-                    {
-                        let pipeline =
-                            device.create_render_pipeline_diligent_async(&descriptor);
+                    if device.diligent_backend() != DiligentBackend::Other && !self_sync {
+                        let pipeline = device.create_render_pipeline_diligent_async(&descriptor);
                         // Non-await poll: this async-block task runs on the
                         // AsyncCompute pool (off the render thread), so a
                         // short blocking spin on GetStatus is safe and keeps

@@ -33,8 +33,8 @@ use diligent_rs::diligent_sys::bindings as sys;
 use std::sync::Mutex;
 
 use super::{diligent_mapping, diligent_registry::DiligentHandle};
-use crate::renderer::RenderDevice;
 use crate::render_resource::{PipelineLayout, ShaderModule};
+use crate::renderer::RenderDevice;
 
 /// The backend the diligent device was created for.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -56,7 +56,12 @@ pub(crate) struct ShaderModuleRecord {
     /// Per-stage Diligent shaders (compiled lazily at PSO creation), keyed by
     /// (stage, entry point) - two entry points on the same stage compile
     /// distinct shaders.
-    diligent: Mutex<Vec<((naga::ShaderStage, String), DiligentHandle<diligent_rs::Shader>)>>,
+    diligent: Mutex<
+        Vec<(
+            (naga::ShaderStage, String),
+            DiligentHandle<diligent_rs::Shader>,
+        )>,
+    >,
 }
 
 impl ShaderModuleRecord {
@@ -86,8 +91,9 @@ impl ShaderModuleRecord {
     ) -> Result<DiligentHandle<diligent_rs::Shader>, String> {
         {
             let cache = self.diligent.lock().unwrap();
-            if let Some(((_, _), shader)) =
-                cache.iter().find(|((s, e), _)| *s == stage && e.as_str() == entry_point)
+            if let Some(((_, _), shader)) = cache
+                .iter()
+                .find(|((s, e), _)| *s == stage && e.as_str() == entry_point)
             {
                 return Ok(shader.clone());
             }
@@ -97,8 +103,9 @@ impl ShaderModuleRecord {
             .ok_or_else(|| "no naga module available for the diligent shader".to_string())?;
         let shader = compile_naga_shader(device, backend, module, stage, entry_point)?;
         let mut cache = self.diligent.lock().unwrap();
-        if let Some((_, existing)) =
-            cache.iter().find(|((s, e), _)| *s == stage && e.as_str() == entry_point)
+        if let Some((_, existing)) = cache
+            .iter()
+            .find(|((s, e), _)| *s == stage && e.as_str() == entry_point)
         {
             return Ok(existing.clone());
         }
@@ -107,8 +114,8 @@ impl ShaderModuleRecord {
     }
 }
 
-/// The `LayoutCache` value: "PRS 数组+immediate_size" combination record
-/// (brief §5.3.3-3/4).
+/// The `LayoutCache` value: the "PRS array + immediate_size" combination
+/// record (brief §5.3.3-3/4).
 pub(crate) struct PipelineLayoutRecord {
     /// The PSO-side pipeline resource signatures (shader-named), one per
     /// bind group, in group order.
@@ -177,20 +184,13 @@ fn compile_naga_shader(
                 entry_point: Some((stage, entry_point.to_string())),
             };
             let mut output = String::new();
-            let mut writer = naga::back::hlsl::Writer::new(
-                &mut output,
-                &hlsl_options,
-                &pipeline_options,
-            );
+            let mut writer =
+                naga::back::hlsl::Writer::new(&mut output, &hlsl_options, &pipeline_options);
             let fragment_entry_point = (stage == naga::ShaderStage::Fragment)
                 .then(|| naga::back::hlsl::FragmentEntryPoint::new(module, entry_point))
                 .flatten();
             writer
-                .write(
-                    module,
-                    &module_info,
-                    fragment_entry_point.as_ref(),
-                )
+                .write(module, &module_info, fragment_entry_point.as_ref())
                 .map_err(|e| format!("naga HLSL generation failed: {e}"))?;
             device
                 .create_shader(&name, &output, shader_type)
@@ -210,10 +210,7 @@ fn compile_naga_shader(
                 Some(&pipeline_options),
             )
             .map_err(|e| format!("naga SPIR-V generation failed: {e}"))?;
-            let bytes: Vec<u8> = words
-                .iter()
-                .flat_map(|w| w.to_le_bytes())
-                .collect();
+            let bytes: Vec<u8> = words.iter().flat_map(|w| w.to_le_bytes()).collect();
             device
                 .create_shader_spirv(&name, &bytes, shader_type)
                 .map(|s| DiligentHandle::new(Arc::new(s)))
@@ -246,8 +243,8 @@ fn immediate_target(module: &naga::Module) -> Option<naga::back::hlsl::BindTarge
 /// `name` must be the shader's HLSL variable name (V15 report: PRS resources
 /// are matched to shader resources by name on D3D12). `group` is the bind
 /// group index; the entries are processed in `binding` order so the PRS
-/// resource order equals the binding order (the SRB "BindingIndex 消歧"
-/// rule from the task brief point 6).
+/// resource order equals the binding order (the SRB "BindingIndex
+/// disambiguation" rule from the task brief point 6).
 ///
 /// M2a (binding model, §6.1.1):
 /// * VarType follows the §8.2 layering: DYNAMIC for `has_dynamic_offset`
@@ -262,9 +259,19 @@ fn pipeline_resource_desc(
     entry: &wgpu_types::BindGroupLayoutEntry,
     name: &CStr,
 ) -> Result<sys::PipelineResourceDesc, String> {
-    let resource_type = diligent_mapping::binding_type_to_resource_type(&entry.ty).ok_or_else(
-        || format!("binding {group}:{} has no Diligent resource type", entry.binding),
-    )?;
+    let resource_type =
+        diligent_mapping::binding_type_to_resource_type(&entry.ty).ok_or_else(|| {
+            format!(
+                "binding {group}:{} has no Diligent resource type",
+                entry.binding
+            )
+        })?;
+    // SAFETY: `PipelineResourceDesc` is a plain-old-data FFI aggregate: a CChar
+    // name pointer, integer/enum fields whose 0 is a valid member, and the
+    // WebGPU-only `WebGPUAttribs` (three integers, ignored by D3D12/Vulkan).
+    // All-zero is a valid empty resource and every field the engine reads -
+    // Name (a CStr the caller keeps alive), ShaderStages, ArraySize,
+    // ResourceType, VarType and Flags - is assigned below.
     let mut desc: sys::PipelineResourceDesc = unsafe { std::mem::zeroed() };
     desc.Name = name.as_ptr();
     desc.ShaderStages = diligent_mapping::shader_stages(entry.visibility);
@@ -309,10 +316,7 @@ pub(crate) fn create_canonical_prs(
         names.push(name);
     }
     device
-        .create_pipeline_resource_signature(
-            &format!("prs_{}", descriptor.label),
-            &resources,
-        )
+        .create_pipeline_resource_signature(&format!("prs_{}", descriptor.label), &resources)
         .map(|p| DiligentHandle::new(Arc::new(p)))
         .map_err(|e| format!("PRS creation failed: {e}"))
 }
@@ -412,9 +416,9 @@ pub(crate) fn immediate_global_name(modules: &[Option<&naga::Module>]) -> Option
     })
 }
 
-/// Creates the dedicated immediate-constants PRS (brief §5.3.3-4: "专用
-/// immediate PRS"; `immediate_size == 0` or no `Immediate` global in the
-/// shaders -> `Ok(None)`).
+/// Creates the dedicated immediate-constants PRS (brief §5.3.3-4: the
+/// "dedicated immediate PRS"; `immediate_size == 0` or no `Immediate` global
+/// in the shaders -> `Ok(None)`).
 pub(crate) fn create_immediate_prs(
     device: &diligent_rs::RenderDevice,
     modules: &[Option<&naga::Module>],
@@ -427,16 +431,21 @@ pub(crate) fn create_immediate_prs(
         return Ok(None);
     };
     let name_c = CString::new(name.as_str()).map_err(|e| format!("PRS name: {e}"))?;
+    // SAFETY: `PipelineResourceDesc` is a plain-old-data FFI aggregate (a CChar
+    // name pointer, integer/enum fields with valid 0 members, and the
+    // WebGPU-only `WebGPUAttribs` of three integers). All-zero is a valid empty
+    // resource and every field is assigned below - `Name` points at `name_c`, which
+    // lives for the whole call, plus the stage mask, array size, resource
+    // type, variable type and the inline-constants flag.
     let mut resource: sys::PipelineResourceDesc = unsafe { std::mem::zeroed() };
     resource.Name = name_c.as_ptr();
     // The stages of every entry point in the shaders (a PRS resource that a
     // stage does not use is tolerated - V15 sample A - so over-covering is
     // safe).
     resource.ShaderStages = modules.iter().flatten().fold(0u32, |bits, module| {
-        module
-            .entry_points
-            .iter()
-            .fold(bits, |bits, ep| bits | diligent_mapping::shader_type_from_naga(ep.stage))
+        module.entry_points.iter().fold(bits, |bits, ep| {
+            bits | diligent_mapping::shader_type_from_naga(ep.stage)
+        })
     });
     // ArraySize is in 32-bit constants (DILIGENT_MAX_INLINE_CONSTANTS = 64
     // DWORDs, Constants.h:66); wgpu immediate_size is in bytes. Oversized
@@ -451,19 +460,14 @@ pub(crate) fn create_immediate_prs(
         ));
     }
     resource.ArraySize = size_dwords;
-    resource.ResourceType =
-        sys::_SHADER_RESOURCE_TYPE::SHADER_RESOURCE_TYPE_CONSTANT_BUFFER
-            as sys::SHADER_RESOURCE_TYPE;
-    resource.VarType =
-        sys::_SHADER_RESOURCE_VARIABLE_TYPE::SHADER_RESOURCE_VARIABLE_TYPE_MUTABLE
-            as sys::SHADER_RESOURCE_VARIABLE_TYPE;
+    resource.ResourceType = sys::_SHADER_RESOURCE_TYPE::SHADER_RESOURCE_TYPE_CONSTANT_BUFFER
+        as sys::SHADER_RESOURCE_TYPE;
+    resource.VarType = sys::_SHADER_RESOURCE_VARIABLE_TYPE::SHADER_RESOURCE_VARIABLE_TYPE_MUTABLE
+        as sys::SHADER_RESOURCE_VARIABLE_TYPE;
     resource.Flags = sys::_PIPELINE_RESOURCE_FLAGS::PIPELINE_RESOURCE_FLAG_INLINE_CONSTANTS
         as sys::PIPELINE_RESOURCE_FLAGS;
     device
-        .create_pipeline_resource_signature(
-            &format!("prs_immediate_{name}"),
-            &[resource],
-        )
+        .create_pipeline_resource_signature(&format!("prs_immediate_{name}"), &[resource])
         .map(|p| Some(DiligentHandle::new(Arc::new(p))))
         .map_err(|e| format!("immediate PRS creation failed: {e}"))
 }
@@ -553,7 +557,8 @@ fn create_graphics_pipeline_inner(
                 Vec::with_capacity(fragment_state.targets.len());
             for target in fragment_state.targets.iter() {
                 let Some(target) = target else {
-                    rtv_formats.push(sys::_TEXTURE_FORMAT::TEX_FORMAT_UNKNOWN as sys::TEXTURE_FORMAT);
+                    rtv_formats
+                        .push(sys::_TEXTURE_FORMAT::TEX_FORMAT_UNKNOWN as sys::TEXTURE_FORMAT);
                     blend_targets.push(no_write_blend_target());
                     continue;
                 };
@@ -592,7 +597,9 @@ fn create_graphics_pipeline_inner(
         },
         None => sys::_TEXTURE_FORMAT::TEX_FORMAT_UNKNOWN as sys::TEXTURE_FORMAT,
     };
-    if rtv_formats.is_empty() && dsv_format == sys::_TEXTURE_FORMAT::TEX_FORMAT_UNKNOWN as sys::TEXTURE_FORMAT {
+    if rtv_formats.is_empty()
+        && dsv_format == sys::_TEXTURE_FORMAT::TEX_FORMAT_UNKNOWN as sys::TEXTURE_FORMAT
+    {
         bevy_log::debug!("diligent: render pipeline without any color or depth target");
         return None;
     }
@@ -685,6 +692,11 @@ fn create_graphics_pipeline_inner(
 
 /// A render-target blend desc that writes nothing (used for unused slots).
 fn no_write_blend_target() -> sys::RenderTargetBlendDesc {
+    // SAFETY: `RenderTargetBlendDesc` is a plain-old-data FFI aggregate of
+    // `Bool`s and enums (no pointers), so the all-zero pattern is a valid
+    // "blending and logic op disabled" target, and the field this helper cares
+    // about - `RenderTargetWriteMask`, whose 0 member is `COLOR_MASK_NONE` - is
+    // set explicitly right below.
     let mut rt: sys::RenderTargetBlendDesc = unsafe { std::mem::zeroed() };
     rt.RenderTargetWriteMask = sys::_COLOR_MASK::COLOR_MASK_NONE as sys::COLOR_MASK;
     rt
@@ -697,6 +709,12 @@ fn no_write_blend_target() -> sys::RenderTargetBlendDesc {
 /// `COLOR_MASK_ALL` on slot 0, which on D3D12 silently discards the PS
 /// output of every other render target).
 fn translate_blend_target(target: &wgpu_types::ColorTargetState) -> sys::RenderTargetBlendDesc {
+    // SAFETY: `RenderTargetBlendDesc` is a plain-old-data FFI aggregate of
+    // `Bool`s and enums (no pointers); all-zero is a valid "blend disabled" target
+    // and the fields the engine reads - the write mask always, plus every
+    // blend factor/op when `target.blend` is `Some` - are assigned below. The
+    // remaining fields stay at their 0/undefined members, which only matters
+    // when blending is off.
     let mut rt: sys::RenderTargetBlendDesc = unsafe { std::mem::zeroed() };
     rt.RenderTargetWriteMask = diligent_mapping::color_writes(target.write_mask);
     if let Some(blend) = target.blend {
@@ -718,6 +736,12 @@ fn translate_blend_target(target: &wgpu_types::ColorTargetState) -> sys::RenderT
 fn translate_rasterizer(
     desc: &crate::render_resource::RawRenderPipelineDescriptor,
 ) -> Option<sys::RasterizerStateDesc> {
+    // SAFETY: `RasterizerStateDesc` is a plain-old-data FFI aggregate of enums,
+    // `Bool`s and scalars (no pointers); all-zero is a valid state (the 0 fill
+    // and cull members are the "undefined" ones) and every field the engine
+    // reads is assigned below: FillMode, CullMode, FrontCounterClockwise,
+    // DepthClipEnable, ScissorEnable stays false (= disabled) and the optional
+    // depth-bias trio.
     let mut ra: sys::RasterizerStateDesc = unsafe { std::mem::zeroed() };
     ra.FillMode = diligent_mapping::fill_mode(desc.primitive.polygon_mode)?;
     ra.CullMode = diligent_mapping::cull_mode(desc.primitive.cull_mode);
@@ -748,6 +772,12 @@ fn translate_depth_stencil(
     desc: &crate::render_resource::RawRenderPipelineDescriptor,
     dsv_format: sys::TEXTURE_FORMAT,
 ) -> sys::DepthStencilStateDesc {
+    // SAFETY: `DepthStencilStateDesc` is a plain-old-data FFI aggregate of
+    // `Bool`/enum bytes and two inline `StencilOpDesc` faces (no pointers); the
+    // all-zero pattern is exactly the "everything disabled" state that the two
+    // early returns below need, and on the enabled path every field that
+    // matters (depth enable/write/compare, stencil masks and both faces) is
+    // assigned before the desc is passed to the engine.
     let mut ds: sys::DepthStencilStateDesc = unsafe { std::mem::zeroed() };
     let Some(state) = &desc.depth_stencil else {
         return ds;
@@ -758,7 +788,9 @@ fn translate_depth_stencil(
     ds.DepthEnable = true;
     ds.DepthWriteEnable = state.depth_write_enabled.unwrap_or(false);
     ds.DepthFunc = diligent_mapping::comparison_function(
-        state.depth_compare.unwrap_or(wgpu_types::CompareFunction::Always),
+        state
+            .depth_compare
+            .unwrap_or(wgpu_types::CompareFunction::Always),
     );
     if state.stencil.is_enabled() {
         ds.StencilEnable = true;
@@ -776,6 +808,10 @@ fn translate_depth_stencil(
 /// the `IGNORE` sentinel for the operations (`compare: Always` disables the
 /// test side), so no unwrapping is needed.
 fn translate_stencil_face(face: &wgpu_types::StencilFaceState) -> sys::StencilOpDesc {
+    // SAFETY: `StencilOpDesc` is a plain-old-data FFI aggregate of four enums (no
+    // pointers) whose zero members (`STENCIL_OP_UNDEFINED` /
+    // `COMPARISON_FUNC_UNKNOWN`) are valid; all four fields are overwritten right
+    // below.
     let mut op: sys::StencilOpDesc = unsafe { std::mem::zeroed() };
     op.StencilFailOp = diligent_mapping::stencil_operation(face.fail_op);
     op.StencilDepthFailOp = diligent_mapping::stencil_operation(face.depth_fail_op);
@@ -803,12 +839,8 @@ pub(crate) fn create_compute_pipeline(
     };
     let backend = device.diligent_backend();
     let entry = entry_point(desc.entry_point);
-    let shader = match module.diligent_shader(
-        diligent,
-        backend,
-        naga::ShaderStage::Compute,
-        entry,
-    ) {
+    let shader = match module.diligent_shader(diligent, backend, naga::ShaderStage::Compute, entry)
+    {
         Ok(shader) => shader,
         Err(err) => {
             bevy_log::warn!("diligent: compute shader: {err}");
@@ -883,8 +915,10 @@ fn build_vertex_layout(
         }
     }
     attributes.sort_by_key(|(location, ..)| *location);
-    for (shader_index, (location, buffer_index, offset, components, value_type, normalized, frequency)) in
-        attributes.into_iter().enumerate()
+    for (
+        shader_index,
+        (location, buffer_index, offset, components, value_type, normalized, frequency),
+    ) in attributes.into_iter().enumerate()
     {
         let semantic = CString::new(format!("LOC{location}")).ok()?;
         let element = sys::LayoutElement {
@@ -972,12 +1006,11 @@ mod tests {
             ty,
             count: count.map(std::num::NonZeroU32::new).flatten(),
         };
-        let dynamic_uniform =
-            |has| BindingType::Buffer {
-                ty: BufferBindingType::Uniform,
-                has_dynamic_offset: has,
-                min_binding_size: None,
-            };
+        let dynamic_uniform = |has| BindingType::Buffer {
+            ty: BufferBindingType::Uniform,
+            has_dynamic_offset: has,
+            min_binding_size: None,
+        };
         let texture = |dimension| BindingType::Texture {
             sample_type: TextureSampleType::Float { filterable: true },
             view_dimension: dimension,
@@ -995,8 +1028,8 @@ mod tests {
             as sys::SHADER_RESOURCE_TYPE;
         let tsrv = sys::_SHADER_RESOURCE_TYPE::SHADER_RESOURCE_TYPE_TEXTURE_SRV
             as sys::SHADER_RESOURCE_TYPE;
-        let sam = sys::_SHADER_RESOURCE_TYPE::SHADER_RESOURCE_TYPE_SAMPLER
-            as sys::SHADER_RESOURCE_TYPE;
+        let sam =
+            sys::_SHADER_RESOURCE_TYPE::SHADER_RESOURCE_TYPE_SAMPLER as sys::SHADER_RESOURCE_TYPE;
 
         // View-uniform slots (binding 0/1/12/13 with has_dynamic_offset):
         // DYNAMIC var type, NO_DYNAMIC flag absent, ArraySize 1.
@@ -1008,12 +1041,16 @@ mod tests {
             )
             .unwrap();
             assert_eq!(desc.VarType, dynamic, "binding {binding} must be DYNAMIC");
-            assert_eq!(desc.Flags, none, "binding {binding} must not carry the flag");
+            assert_eq!(
+                desc.Flags, none,
+                "binding {binding} must not carry the flag"
+            );
             assert_eq!(desc.ArraySize, 1, "binding {binding}");
         }
 
         // Non-dynamic uniform (e.g. Globals at 11): MUTABLE + NO_DYNAMIC_BUFFERS.
-        let desc = pipeline_resource_desc(0, &entry(11, dynamic_uniform(false), None), &name(11)).unwrap();
+        let desc =
+            pipeline_resource_desc(0, &entry(11, dynamic_uniform(false), None), &name(11)).unwrap();
         assert_eq!(desc.VarType, mutable);
         assert_eq!(desc.Flags, no_dynamic);
         assert_eq!(desc.ResourceType, cb);
@@ -1105,7 +1142,8 @@ mod tests {
             entry_point: Some((naga::ShaderStage::Fragment, entry_point.to_string())),
         };
         let mut output = String::new();
-        let mut writer = naga::back::hlsl::Writer::new(&mut output, &hlsl_options, &pipeline_options);
+        let mut writer =
+            naga::back::hlsl::Writer::new(&mut output, &hlsl_options, &pipeline_options);
         writer
             .write(&module, &module_info, None)
             .expect("hlsl generation");
@@ -1132,8 +1170,7 @@ fn main(@location(0) uv: vec2<f32>) -> @location(0) vec4<f32> {
         // `PS_OUTPUT`/`SV_TARGET`; tolerate both spellings (the generator
         // version pins the exact casing).
         assert!(
-            hlsl.contains("PS_OUTPUT")
-                || hlsl.to_ascii_uppercase().contains("SV_TARGET"),
+            hlsl.contains("PS_OUTPUT") || hlsl.to_ascii_uppercase().contains("SV_TARGET"),
             "HLSL fragment must emit a pixel-shader output signature (got {})",
             hlsl
         );

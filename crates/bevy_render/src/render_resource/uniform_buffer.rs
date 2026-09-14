@@ -1,5 +1,9 @@
 use core::{marker::PhantomData, num::NonZero};
 
+use crate::render_resource::wgpu_compat::QueueWriteBufferView;
+use crate::render_resource::{
+    BindingResource, BufferBinding, BufferDescriptor, BufferInitDescriptor, BufferUsages,
+};
 use crate::{
     render_resource::{make_buffer_label, Buffer},
     renderer::{RenderDevice, RenderQueue},
@@ -9,8 +13,6 @@ use encase::{
     DynamicUniformBuffer as DynamicUniformBufferWrapper, ShaderType,
     UniformBuffer as UniformBufferWrapper,
 };
-use crate::render_resource::{BindingResource, BufferBinding, BufferDescriptor, BufferInitDescriptor, BufferUsages};
-use crate::render_resource::wgpu_compat::QueueWriteBufferView;
 
 use super::IntoBinding;
 

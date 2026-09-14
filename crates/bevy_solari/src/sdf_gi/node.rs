@@ -24,7 +24,6 @@ use bevy_utils::default;
 pub struct SdfGiPipelines {
     /// Bind group layout shared by the voxelize / ray-march / irradiance
     /// compute passes.
-
     bind_group_layout: BindGroupLayoutDescriptor,
     /// Voxelize compute pipeline (18.1).
     #[expect(dead_code, reason = "consumed by the 18.1 voxelize dispatch")]
@@ -32,7 +31,6 @@ pub struct SdfGiPipelines {
     /// Ray-march compute pipeline: SDF AO + soft shadows (18.2).
     ray_march_pipeline: CachedComputePipelineId,
     /// Single-bounce GI + irradiance blend (18.3).
-
     irradiance_pipeline: CachedComputePipelineId,
 }
 
@@ -65,19 +63,18 @@ pub fn init_sdf_gi_pipelines(
         ),
     );
 
-    let create_pipeline = |label: &'static str,
-                           entry_point: &'static str,
-                           shader: Handle<Shader>| {
-        pipeline_cache.queue_compute_pipeline(ComputePipelineDescriptor {
-            label: Some(label.into()),
-            layout: vec![bind_group_layout.clone()],
-            immediate_size: 8,
-            shader,
-            shader_defs: vec![],
-            entry_point: Some(entry_point.into()),
-            ..default()
-        })
-    };
+    let create_pipeline =
+        |label: &'static str, entry_point: &'static str, shader: Handle<Shader>| {
+            pipeline_cache.queue_compute_pipeline(ComputePipelineDescriptor {
+                label: Some(label.into()),
+                layout: vec![bind_group_layout.clone()],
+                immediate_size: 8,
+                shader,
+                shader_defs: vec![],
+                entry_point: Some(entry_point.into()),
+                ..default()
+            })
+        };
 
     let voxelize_pipeline = create_pipeline(
         "sdf_gi_voxelize",

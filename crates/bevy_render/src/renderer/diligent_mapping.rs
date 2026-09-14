@@ -9,7 +9,8 @@
 //! All functions are pure (no device access) so they can be unit-tested
 //! without a GPU. Failures are reported through `Option`/`Result` and must be
 //! surfaced as graceful `None`/warn paths by callers (never panics) - see the
-//! task brief's "新建路径失败必须走 RenderErrorPolicy/错误返回" rule.
+//! task brief's rule that a newly built path must fail through
+//! `RenderErrorPolicy` or an explicit error return.
 
 use diligent_rs::diligent_sys::bindings as sys;
 use wgpu_types::{AddressMode, BufferBindingType, BufferUsages, CompareFunction, FilterMode};
@@ -145,11 +146,12 @@ pub fn vertex_format_to_value_type(
         F::Sint32x2 => (vt(sys::_VALUE_TYPE::VT_INT32), 2, false),
         F::Sint32x3 => (vt(sys::_VALUE_TYPE::VT_INT32), 3, false),
         F::Sint32x4 => (vt(sys::_VALUE_TYPE::VT_INT32), 4, false),
-        F::Float64 | F::Float64x2 | F::Float64x3 | F::Float64x4
+        F::Float64
+        | F::Float64x2
+        | F::Float64x3
+        | F::Float64x4
         | F::Unorm10_10_10_2
-        | F::Unorm8x4Bgra => {
-            return None
-        }
+        | F::Unorm8x4Bgra => return None,
     })
 }
 
@@ -189,17 +191,13 @@ pub fn filter_type(mode: FilterMode, comparison: bool, anisotropy: bool) -> sys:
     let ft = |v: sys::_FILTER_TYPE| v as sys::FILTER_TYPE;
     match (mode, comparison, anisotropy) {
         (FilterMode::Nearest, false, _) => ft(sys::_FILTER_TYPE::FILTER_TYPE_POINT),
-        (FilterMode::Nearest, true, _) => {
-            ft(sys::_FILTER_TYPE::FILTER_TYPE_COMPARISON_POINT)
-        }
+        (FilterMode::Nearest, true, _) => ft(sys::_FILTER_TYPE::FILTER_TYPE_COMPARISON_POINT),
         (FilterMode::Linear, false, true) => ft(sys::_FILTER_TYPE::FILTER_TYPE_ANISOTROPIC),
         (FilterMode::Linear, false, false) => ft(sys::_FILTER_TYPE::FILTER_TYPE_LINEAR),
         (FilterMode::Linear, true, true) => {
             ft(sys::_FILTER_TYPE::FILTER_TYPE_COMPARISON_ANISOTROPIC)
         }
-        (FilterMode::Linear, true, false) => {
-            ft(sys::_FILTER_TYPE::FILTER_TYPE_COMPARISON_LINEAR)
-        }
+        (FilterMode::Linear, true, false) => ft(sys::_FILTER_TYPE::FILTER_TYPE_COMPARISON_LINEAR),
     }
 }
 
@@ -229,7 +227,9 @@ pub fn blend_factor(factor: wgpu_types::BlendFactor) -> sys::BLEND_FACTOR {
             bf(sys::_BLEND_FACTOR::BLEND_FACTOR_INV_BLEND_FACTOR)
         }
         wgpu_types::BlendFactor::Src1 => bf(sys::_BLEND_FACTOR::BLEND_FACTOR_SRC1_COLOR),
-        wgpu_types::BlendFactor::OneMinusSrc1 => bf(sys::_BLEND_FACTOR::BLEND_FACTOR_INV_SRC1_COLOR),
+        wgpu_types::BlendFactor::OneMinusSrc1 => {
+            bf(sys::_BLEND_FACTOR::BLEND_FACTOR_INV_SRC1_COLOR)
+        }
         wgpu_types::BlendFactor::Src1Alpha => bf(sys::_BLEND_FACTOR::BLEND_FACTOR_SRC1_ALPHA),
         wgpu_types::BlendFactor::OneMinusSrc1Alpha => {
             bf(sys::_BLEND_FACTOR::BLEND_FACTOR_INV_SRC1_ALPHA)
@@ -343,11 +343,10 @@ pub fn shader_stages(stages: wgpu_types::ShaderStages) -> sys::SHADER_TYPE {
 pub fn shader_type_from_naga(stage: naga::ShaderStage) -> sys::SHADER_TYPE {
     let st = |v: sys::_SHADER_TYPE| v as sys::SHADER_TYPE;
     match stage {
-        naga::ShaderStage::Vertex => st(sys::_SHADER_TYPE::SHADER_TYPE_VERTEX),
         naga::ShaderStage::Fragment => st(sys::_SHADER_TYPE::SHADER_TYPE_PIXEL),
         naga::ShaderStage::Compute => st(sys::_SHADER_TYPE::SHADER_TYPE_COMPUTE),
-        // naga::ShaderStage is non_exhaustive (future stages); vertex is a
-        // defensive stand-in that never matches today.
+        // `naga::ShaderStage` is non_exhaustive (future stages). Using vertex here is at
+        // defensive stand-in for those and also handles `ShaderStage::Vertex` itself.
         _ => st(sys::_SHADER_TYPE::SHADER_TYPE_VERTEX),
     }
 }
@@ -356,7 +355,9 @@ pub fn shader_type_from_naga(stage: naga::ShaderStage) -> sys::SHADER_TYPE {
 ///
 /// Returns `None` for types without a Diligent counterpart (external
 /// textures).
-pub fn binding_type_to_resource_type(ty: &wgpu_types::BindingType) -> Option<sys::SHADER_RESOURCE_TYPE> {
+pub fn binding_type_to_resource_type(
+    ty: &wgpu_types::BindingType,
+) -> Option<sys::SHADER_RESOURCE_TYPE> {
     let rt = |v: sys::_SHADER_RESOURCE_TYPE| v as sys::SHADER_RESOURCE_TYPE;
     Some(match ty {
         wgpu_types::BindingType::Buffer {
@@ -410,7 +411,9 @@ pub fn binding_count(entry: &wgpu_types::BindGroupLayoutEntry) -> u32 {
 ///
 /// The tier lands on both the SRB-side (canonical) and the PSO-side
 /// (shader-named) PRS through `pipeline_resource_desc`.
-pub fn binding_var_type(entry: &wgpu_types::BindGroupLayoutEntry) -> sys::SHADER_RESOURCE_VARIABLE_TYPE {
+pub fn binding_var_type(
+    entry: &wgpu_types::BindGroupLayoutEntry,
+) -> sys::SHADER_RESOURCE_VARIABLE_TYPE {
     let vt = |v: sys::_SHADER_RESOURCE_VARIABLE_TYPE| v as sys::SHADER_RESOURCE_VARIABLE_TYPE;
     match entry.ty {
         wgpu_types::BindingType::Buffer {
@@ -466,8 +469,8 @@ pub fn binding_resource_flags(
             ..
         }
     );
-    let mut flags: sys::PIPELINE_RESOURCE_FLAGS = sys::_PIPELINE_RESOURCE_FLAGS::PIPELINE_RESOURCE_FLAG_NONE
-        as sys::PIPELINE_RESOURCE_FLAGS;
+    let mut flags: sys::PIPELINE_RESOURCE_FLAGS =
+        sys::_PIPELINE_RESOURCE_FLAGS::PIPELINE_RESOURCE_FLAG_NONE as sys::PIPELINE_RESOURCE_FLAGS;
     if is_buffer && !is_dynamic {
         flags |= sys::_PIPELINE_RESOURCE_FLAGS::PIPELINE_RESOURCE_FLAG_NO_DYNAMIC_BUFFERS
             as sys::PIPELINE_RESOURCE_FLAGS;
@@ -559,7 +562,10 @@ mod tests {
         assert_eq!(buffer_usage_to_bind_flags(BufferUsages::empty()), 0);
 
         let storage = buffer_usage_to_bind_flags(BufferUsages::STORAGE);
-        assert_ne!(storage & (sys::_BIND_FLAGS::BIND_UNORDERED_ACCESS as u32), 0);
+        assert_ne!(
+            storage & (sys::_BIND_FLAGS::BIND_UNORDERED_ACCESS as u32),
+            0
+        );
         assert_ne!(storage & (sys::_BIND_FLAGS::BIND_SHADER_RESOURCE as u32), 0);
 
         let combined = buffer_usage_to_bind_flags(BufferUsages::VERTEX | BufferUsages::INDEX);
@@ -592,8 +598,14 @@ mod tests {
             srv
         );
         let attachment = texture_usage_to_bind_flags(wgpu_types::TextureUsages::RENDER_ATTACHMENT);
-        assert_ne!(attachment & (sys::_BIND_FLAGS::BIND_RENDER_TARGET as u32), 0);
-        assert_ne!(attachment & (sys::_BIND_FLAGS::BIND_DEPTH_STENCIL as u32), 0);
+        assert_ne!(
+            attachment & (sys::_BIND_FLAGS::BIND_RENDER_TARGET as u32),
+            0
+        );
+        assert_ne!(
+            attachment & (sys::_BIND_FLAGS::BIND_DEPTH_STENCIL as u32),
+            0
+        );
     }
 
     #[test]
@@ -624,8 +636,14 @@ mod tests {
         for (w, d) in [
             (C::Never, sys::_COMPARISON_FUNCTION::COMPARISON_FUNC_NEVER),
             (C::Less, sys::_COMPARISON_FUNCTION::COMPARISON_FUNC_LESS),
-            (C::LessEqual, sys::_COMPARISON_FUNCTION::COMPARISON_FUNC_LESS_EQUAL),
-            (C::Greater, sys::_COMPARISON_FUNCTION::COMPARISON_FUNC_GREATER),
+            (
+                C::LessEqual,
+                sys::_COMPARISON_FUNCTION::COMPARISON_FUNC_LESS_EQUAL,
+            ),
+            (
+                C::Greater,
+                sys::_COMPARISON_FUNCTION::COMPARISON_FUNC_GREATER,
+            ),
             (C::Always, sys::_COMPARISON_FUNCTION::COMPARISON_FUNC_ALWAYS),
         ] {
             assert_eq!(comparison_function(w), expect(d));
@@ -653,8 +671,14 @@ mod tests {
         let rev = sys::_BLEND_OPERATION::BLEND_OPERATION_REV_SUBTRACT as sys::BLEND_OPERATION;
         assert_eq!(blend_factor(BF::One), one);
         assert_eq!(blend_operation(BO::ReverseSubtract), rev);
-        assert_eq!(blend_factor(BF::SrcAlphaSaturated), sys::_BLEND_FACTOR::BLEND_FACTOR_SRC_ALPHA_SAT as sys::BLEND_FACTOR);
-        assert_eq!(blend_factor(BF::Constant), sys::_BLEND_FACTOR::BLEND_FACTOR_BLEND_FACTOR as sys::BLEND_FACTOR);
+        assert_eq!(
+            blend_factor(BF::SrcAlphaSaturated),
+            sys::_BLEND_FACTOR::BLEND_FACTOR_SRC_ALPHA_SAT as sys::BLEND_FACTOR
+        );
+        assert_eq!(
+            blend_factor(BF::Constant),
+            sys::_BLEND_FACTOR::BLEND_FACTOR_BLEND_FACTOR as sys::BLEND_FACTOR
+        );
     }
 
     #[test]
@@ -693,16 +717,29 @@ mod tests {
 
     #[test]
     fn topology_and_raster_state_map() {
-        let tri = sys::_PRIMITIVE_TOPOLOGY::PRIMITIVE_TOPOLOGY_TRIANGLE_LIST as sys::PRIMITIVE_TOPOLOGY;
-        assert_eq!(primitive_topology(wgpu_types::PrimitiveTopology::TriangleList), tri);
+        let tri =
+            sys::_PRIMITIVE_TOPOLOGY::PRIMITIVE_TOPOLOGY_TRIANGLE_LIST as sys::PRIMITIVE_TOPOLOGY;
+        assert_eq!(
+            primitive_topology(wgpu_types::PrimitiveTopology::TriangleList),
+            tri
+        );
         assert_eq!(
             fill_mode(wgpu_types::PolygonMode::Fill),
             Some(sys::_FILL_MODE::FILL_MODE_SOLID as sys::FILL_MODE)
         );
         assert_eq!(fill_mode(wgpu_types::PolygonMode::Point), None);
-        assert_eq!(cull_mode(None), sys::_CULL_MODE::CULL_MODE_NONE as sys::CULL_MODE);
-        assert_eq!(cull_mode(Some(wgpu_types::Face::Front)), sys::_CULL_MODE::CULL_MODE_FRONT as sys::CULL_MODE);
-        assert_eq!(cull_mode(Some(wgpu_types::Face::Back)), sys::_CULL_MODE::CULL_MODE_BACK as sys::CULL_MODE);
+        assert_eq!(
+            cull_mode(None),
+            sys::_CULL_MODE::CULL_MODE_NONE as sys::CULL_MODE
+        );
+        assert_eq!(
+            cull_mode(Some(wgpu_types::Face::Front)),
+            sys::_CULL_MODE::CULL_MODE_FRONT as sys::CULL_MODE
+        );
+        assert_eq!(
+            cull_mode(Some(wgpu_types::Face::Back)),
+            sys::_CULL_MODE::CULL_MODE_BACK as sys::CULL_MODE
+        );
     }
 
     #[test]
@@ -711,7 +748,10 @@ mod tests {
         let ps = sys::_SHADER_TYPE::SHADER_TYPE_PIXEL as u32;
         let cs = sys::_SHADER_TYPE::SHADER_TYPE_COMPUTE as u32;
         assert_eq!(shader_stages(wgpu_types::ShaderStages::VERTEX), vs);
-        assert_eq!(shader_stages(wgpu_types::ShaderStages::VERTEX_FRAGMENT), vs | ps);
+        assert_eq!(
+            shader_stages(wgpu_types::ShaderStages::VERTEX_FRAGMENT),
+            vs | ps
+        );
         assert_eq!(shader_stages(wgpu_types::ShaderStages::COMPUTE), cs);
         assert_eq!(shader_stages(wgpu_types::ShaderStages::empty()), 0);
     }
@@ -726,7 +766,10 @@ mod tests {
         };
         assert_eq!(
             binding_type_to_resource_type(&uniform),
-            Some(sys::_SHADER_RESOURCE_TYPE::SHADER_RESOURCE_TYPE_CONSTANT_BUFFER as sys::SHADER_RESOURCE_TYPE)
+Some(
+                sys::_SHADER_RESOURCE_TYPE::SHADER_RESOURCE_TYPE_CONSTANT_BUFFER
+                    as sys::SHADER_RESOURCE_TYPE
+            )
         );
         let readonly = BindingType::Buffer {
             ty: BufferBindingType::Storage { read_only: true },
@@ -735,7 +778,10 @@ mod tests {
         };
         assert_eq!(
             binding_type_to_resource_type(&readonly),
-            Some(sys::_SHADER_RESOURCE_TYPE::SHADER_RESOURCE_TYPE_BUFFER_SRV as sys::SHADER_RESOURCE_TYPE)
+Some(
+                sys::_SHADER_RESOURCE_TYPE::SHADER_RESOURCE_TYPE_BUFFER_SRV
+                    as sys::SHADER_RESOURCE_TYPE
+            )
         );
         let tex = BindingType::Texture {
             sample_type: TextureSampleType::Float { filterable: true },
@@ -764,8 +810,8 @@ mod tests {
     #[test]
     fn binding_model_mapping_table_is_complete() {
         use wgpu_types::{
-            BindingType, BufferBindingType, SamplerBindingType, StorageTextureAccess, TextureFormat,
-            TextureSampleType, TextureViewDimension,
+            BindingType, BufferBindingType, SamplerBindingType, StorageTextureAccess,
+            TextureFormat, TextureSampleType, TextureViewDimension,
         };
         let rt = |v: sys::_SHADER_RESOURCE_TYPE| v as sys::SHADER_RESOURCE_TYPE;
         let cb = rt(sys::_SHADER_RESOURCE_TYPE::SHADER_RESOURCE_TYPE_CONSTANT_BUFFER);
@@ -830,9 +876,7 @@ mod tests {
             );
         }
         assert_eq!(
-            binding_type_to_resource_type(&BindingType::Sampler(
-                SamplerBindingType::Filtering
-            )),
+            binding_type_to_resource_type(&BindingType::Sampler(SamplerBindingType::Filtering)),
             Some(sam)
         );
         assert_eq!(
@@ -1045,29 +1089,14 @@ mod tests {
         };
 
         // mesh_view_bindings.wgsl:135/136 - diffuse/specular environment maps.
-        assert_eq!(
-            binding_count(&texture(0, TextureViewDimension::Cube, 8)),
-            8
-        );
-        assert_eq!(
-            binding_count(&texture(1, TextureViewDimension::Cube, 8)),
-            8
-        );
+        assert_eq!(binding_count(&texture(0, TextureViewDimension::Cube, 8)), 8);
+        assert_eq!(binding_count(&texture(1, TextureViewDimension::Cube, 8)), 8);
         // mesh_view_bindings.wgsl:147 - irradiance volumes.
-        assert_eq!(
-            binding_count(&texture(3, TextureViewDimension::D3, 8)),
-            8
-        );
+        assert_eq!(binding_count(&texture(3, TextureViewDimension::D3, 8)), 8);
         // mesh_view_bindings.wgsl:157 - clustered decal textures.
-        assert_eq!(
-            binding_count(&texture(6, TextureViewDimension::D2, 8)),
-            8
-        );
+        assert_eq!(binding_count(&texture(6, TextureViewDimension::D2, 8)), 8);
         // lightmap.wgsl:6-7 - lightmap texture + sampler arrays.
-        assert_eq!(
-            binding_count(&texture(4, TextureViewDimension::D2, 4)),
-            4
-        );
+        assert_eq!(binding_count(&texture(4, TextureViewDimension::D2, 4)), 4);
         assert_eq!(binding_count(&sampler(5, 4)), 4);
 
         // And the flag tier stays MUTABLE for arrayed textures (no flag).
@@ -1112,15 +1141,18 @@ mod tests {
         };
         let tsrv = sys::_SHADER_RESOURCE_TYPE::SHADER_RESOURCE_TYPE_TEXTURE_SRV
             as sys::SHADER_RESOURCE_TYPE;
-        let sampler_rt = sys::_SHADER_RESOURCE_TYPE::SHADER_RESOURCE_TYPE_SAMPLER
-            as sys::SHADER_RESOURCE_TYPE;
+        let sampler_rt =
+            sys::_SHADER_RESOURCE_TYPE::SHADER_RESOURCE_TYPE_SAMPLER as sys::SHADER_RESOURCE_TYPE;
         let runtime = sys::_PIPELINE_RESOURCE_FLAGS::PIPELINE_RESOURCE_FLAG_RUNTIME_ARRAY
             as sys::PIPELINE_RESOURCE_FLAGS;
 
         // Bindless slab: 2048 (non-Apple) / 64 (Apple). Both >= 64.
         assert_eq!(binding_resource_flags(&texture(1, 2048), tsrv), runtime);
         assert_eq!(binding_resource_flags(&texture(2, 64), tsrv), runtime);
-        assert_eq!(binding_resource_flags(&sampler(1, 2048), sampler_rt), runtime);
+        assert_eq!(
+            binding_resource_flags(&sampler(1, 2048), sampler_rt),
+            runtime
+        );
 
         // Solari scene arrays (binder.rs: 500 / 5000) also carry the flag.
         assert_eq!(binding_resource_flags(&texture(2, 500), tsrv), runtime);
@@ -1154,22 +1186,24 @@ mod tests {
             ty,
             count: None,
         };
-        let dynamic_uniform =
-            |has| BindingType::Buffer {
-                ty: BufferBindingType::Uniform,
-                has_dynamic_offset: has,
-                min_binding_size: None,
-            };
+        let dynamic_uniform = |has| BindingType::Buffer {
+            ty: BufferBindingType::Uniform,
+            has_dynamic_offset: has,
+            min_binding_size: None,
+        };
         // A view-group-shaped layout: dynamic at 0/1/12, static buffers and
         // textures in between.
         let entries = vec![
             entry(0, dynamic_uniform(true)),
             entry(1, dynamic_uniform(true)),
-            entry(2, BindingType::Texture {
-                sample_type: wgpu_types::TextureSampleType::Depth,
-                view_dimension: wgpu_types::TextureViewDimension::Cube,
-                multisampled: false,
-            }),
+            entry(
+                2,
+                BindingType::Texture {
+                    sample_type: wgpu_types::TextureSampleType::Depth,
+                    view_dimension: wgpu_types::TextureViewDimension::Cube,
+                    multisampled: false,
+                },
+            ),
             entry(12, dynamic_uniform(true)),
             entry(13, dynamic_uniform(false)),
         ];
@@ -1190,12 +1224,11 @@ mod tests {
             ty,
             count: None,
         };
-        let dynamic_uniform =
-            |has| BindingType::Buffer {
-                ty: BufferBindingType::Uniform,
-                has_dynamic_offset: has,
-                min_binding_size: None,
-            };
+        let dynamic_uniform = |has| BindingType::Buffer {
+            ty: BufferBindingType::Uniform,
+            has_dynamic_offset: has,
+            min_binding_size: None,
+        };
         // Binding indices in descending order, static bindings interleaved -
         // the ascending output is what the offset array maps against.
         let entries = vec![
@@ -1216,9 +1249,7 @@ mod tests {
     /// the SRB a graphics signature, probed on the graphics stages.
     #[test]
     fn srb_variable_probe_stages_follow_the_pipeline_type_rule() {
-        use wgpu_types::{
-            BindingType, ShaderStages as S, TextureSampleType, TextureViewDimension,
-        };
+        use wgpu_types::{BindingType, ShaderStages as S, TextureSampleType, TextureViewDimension};
         let entry = |visibility| wgpu_types::BindGroupLayoutEntry {
             binding: 0,
             visibility,

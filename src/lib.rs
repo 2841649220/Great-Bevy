@@ -1,8 +1,4 @@
 #![cfg_attr(docsrs, feature(doc_cfg))]
-#![expect(
-    clippy::doc_markdown,
-    reason = "Clippy lints for un-backticked identifiers within the cargo features list, which we don't want."
-)]
 //! [![Bevy Logo](https://bevy.org/assets/bevy_logo_docs.svg)](https://bevy.org)
 //!
 //! Bevy is an open-source, modular game engine built in Rust, with a focus on developer productivity

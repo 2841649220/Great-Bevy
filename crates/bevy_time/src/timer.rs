@@ -221,7 +221,7 @@ impl Timer {
     /// ```
     #[inline]
     pub fn almost_finish(&mut self) {
-        let remaining = self.remaining() - Duration::from_nanos(1);
+        let remaining = self.remaining().saturating_sub(Duration::from_nanos(1));
         self.tick(remaining);
     }
 
@@ -457,7 +457,7 @@ impl Timer {
     /// ```
     #[inline]
     pub fn remaining(&self) -> Duration {
-        self.duration() - self.elapsed()
+        self.duration().saturating_sub(self.elapsed())
     }
 
     /// Returns the number of times a repeating timer
@@ -688,5 +688,28 @@ mod tests {
         t.tick(Duration::from_secs_f32(5.0));
         assert!(!t.just_finished());
         assert!(!t.is_finished());
+    }
+
+    #[test]
+    fn remaining_when_elapsed_exceeds_duration() {
+        let mut t = Timer::from_seconds(1.0, TimerMode::Once);
+        t.set_elapsed(Duration::from_secs(2));
+        assert!(t.elapsed() > t.duration());
+        assert_eq!(t.remaining(), Duration::ZERO);
+    }
+
+    #[test]
+    fn almost_finish_on_already_finished_or_zero_duration() {
+        let mut finished_timer = Timer::from_seconds(1.0, TimerMode::Once);
+        finished_timer.tick(Duration::from_secs(1));
+        assert!(finished_timer.is_finished());
+        assert_eq!(finished_timer.remaining(), Duration::ZERO);
+        finished_timer.almost_finish();
+        assert_eq!(finished_timer.remaining(), Duration::ZERO);
+
+        let mut zero_timer = Timer::from_seconds(0.0, TimerMode::Once);
+        assert_eq!(zero_timer.remaining(), Duration::ZERO);
+        zero_timer.almost_finish();
+        assert_eq!(zero_timer.remaining(), Duration::ZERO);
     }
 }

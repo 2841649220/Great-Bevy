@@ -10,14 +10,10 @@ mod render_context;
 pub(crate) mod render_device;
 mod wgpu_wrapper;
 
-pub use diligent_features::DiligentFeatures;
-pub use render_context::{
-    CurrentView, FlushCommands, PendingCommandBuffers, RenderContext, RenderContextState, ViewQuery,
+use crate::render_resource::wgpu_compat::{
+    Adapter, CommandBuffer, Device, Instance, QueueWriteBufferView,
 };
-pub use render_device::*;
-pub use wgpu_wrapper::WgpuWrapper;
 use crate::renderer::diligent_registry::DiligentHandle;
-use crate::render_resource::wgpu_compat::{Adapter, CommandBuffer, Device, Instance, QueueWriteBufferView};
 use crate::{
     render_resource::Buffer,
     settings::{RenderResources, WgpuSettings},
@@ -34,9 +30,15 @@ use bevy_log::{debug, info, warn};
 use bevy_render::camera::ExtractedCamera;
 use bevy_utils::default;
 use bevy_window::RawHandleWrapperHolder;
+pub use diligent_features::DiligentFeatures;
 use diligent_rs::diligent_sys::bindings as sys;
+pub use render_context::{
+    CurrentView, FlushCommands, PendingCommandBuffers, RenderContext, RenderContextState, ViewQuery,
+};
+pub use render_device::*;
 use std::sync::Mutex;
 use wgpu_types::Backends;
+pub use wgpu_wrapper::WgpuWrapper;
 
 /// Schedule label for the root render graph schedule. This schedule runs once per frame
 /// in the [`render_system`] system and is responsible for driving the entire rendering process.
@@ -98,9 +100,7 @@ pub fn render_system(
     // M1-4b-1: the per-frame copies (screenshots, GPU readbacks) run on the
     // Diligent immediate context; the owned handle ends the world borrows
     // before the mutable-world calls below.
-    let diligent_context = world
-        .resource::<RenderDevice>()
-        .diligent_context_handle();
+    let diligent_context = world.resource::<RenderDevice>().diligent_context_handle();
 
     if let Some(context) = diligent_context {
         crate::view::screenshot::submit_screenshot_commands(world, &context);
@@ -236,7 +236,9 @@ impl RenderQueue {
             return;
         };
         let _guard = diligent_registry::context_guard();
-        if let Err(err) = diligent_upload_texture(&context, texture, &destination, data, data_layout, size) {
+        if let Err(err) =
+            diligent_upload_texture(&context, texture, &destination, data, data_layout, size)
+        {
             bevy_log::warn!("diligent: write_texture failed: {err}");
         }
     }
@@ -277,7 +279,10 @@ impl RenderQueue {
 
     /// Compacts a BLAS (no-op on the diligent path - returns a clone of the
     /// input handle).
-    pub fn compact_blas(&self, blas: &crate::render_resource::Blas) -> crate::render_resource::Blas {
+    pub fn compact_blas(
+        &self,
+        blas: &crate::render_resource::Blas,
+    ) -> crate::render_resource::Blas {
         let _ = self;
         blas.clone()
     }
@@ -300,7 +305,9 @@ fn diligent_upload_texture(
     let (block_width, block_height) = format.block_dimensions();
     let bytes_per_block = format.block_copy_size(None).unwrap_or(0) as u32;
     let blocks_per_row = size.width.div_ceil(block_width);
-    let row_bytes = data_layout.bytes_per_row.unwrap_or(blocks_per_row * bytes_per_block) as u64;
+    let row_bytes = data_layout
+        .bytes_per_row
+        .unwrap_or(blocks_per_row * bytes_per_block) as u64;
     let rows = size.height.div_ceil(block_height) as u64;
     let depth_stride = data_layout
         .rows_per_image
@@ -314,6 +321,11 @@ fn diligent_upload_texture(
         ),
         _ => (0, 1, destination.origin.z),
     };
+    // SAFETY: `TextureSubResData` is a plain-old-data FFI aggregate (two raw
+    // pointers and three `Uint64`s). All-zero is the documented "no source
+    // buffer" form (`pSrcBuffer` null, `SrcOffset` 0) and every field is se
+    // below: `pData`/`Stride`/`DepthStride` from the caller's byte slice and
+    // layout, with `pSrcBuffer` explicitly nulled.
     let mut subres: sys::TextureSubResData = unsafe { std::mem::zeroed() };
     subres.pData = data.as_ptr().cast();
     subres.Stride = row_bytes;
@@ -327,6 +339,9 @@ fn diligent_upload_texture(
         MaxY: destination.origin.y + size.height,
         MaxZ: max_z,
     };
+    // SAFETY: `context` is a live diligent-rs `DeviceContext` wrapper (the
+    // caller holds the immediate context), so its raw pointer and vtable are
+    // valid; the `UpdateTexture` slot is checked with `as_ref().ok_or(..)`.
     let update = unsafe {
         (*(*context.as_raw()).pVtbl)
             .DeviceContext
@@ -446,58 +461,73 @@ pub fn initialize_renderer(
                     _ => diligent_rs::desc::ValidationLevel::default(),
                 };
                 match factory.create_device_and_contexts_with_validation(level) {
-                Ok((device, context)) => {
-                    let device_info = device.device_info();
-                    let adapter = device.adapter_info();
-                    // M2a-1 review, fix 3: latch the device's constant buffer
-                    // offset alignment - the `SetBufferOffset` offset
-                    // validation rule on the draw path.
-                    latch_constant_buffer_offset_alignment(
-                        adapter.Buffer.ConstantBufferOffsetAlignment,
-                    );
-                    let backend = match device_info.Type {
-                        t if t == (sys::RENDER_DEVICE_TYPE::RENDER_DEVICE_TYPE_D3D12
-                            as sys::RENDER_DEVICE_TYPE) =>
-                        {
-                            diligent_pso::DiligentBackend::D3D12
-                        }
-                        t if t == (sys::RENDER_DEVICE_TYPE::RENDER_DEVICE_TYPE_VULKAN
-                            as sys::RENDER_DEVICE_TYPE) =>
-                        {
-                            diligent_pso::DiligentBackend::Vulkan
-                        }
-                        _ => diligent_pso::DiligentBackend::Other,
-                    };
-                    let caps = diligent_features::DiligentCaps::derive(&device);
-                    let info = diligent_adapter_info(&device_info, &adapter);
-                    (
-                        Some(DiligentHandle::new(Arc::new(factory))),
-                        Some(DiligentHandle::new(Arc::new(device))),
-                        Some(DiligentHandle::new(Arc::new(context))),
-                        backend,
-                        caps,
-                        Some(info),
-                    )
+                    Ok((device, context)) => {
+                        let device_info = device.device_info();
+                        let adapter = device.adapter_info();
+                        // M2a-1 review, fix 3: latch the device's constant buffer
+                        // offset alignment - the `SetBufferOffset` offset
+                        // validation rule on the draw path.
+                        latch_constant_buffer_offset_alignment(
+                            adapter.Buffer.ConstantBufferOffsetAlignment,
+                        );
+                        let backend = match device_info.Type {
+                            t if t
+                                == (sys::RENDER_DEVICE_TYPE::RENDER_DEVICE_TYPE_D3D12
+                                    as sys::RENDER_DEVICE_TYPE) =>
+                            {
+                                diligent_pso::DiligentBackend::D3D12
+                            }
+                            t if t
+                                == (sys::RENDER_DEVICE_TYPE::RENDER_DEVICE_TYPE_VULKAN
+                                    as sys::RENDER_DEVICE_TYPE) =>
+                            {
+                                diligent_pso::DiligentBackend::Vulkan
+                            }
+                            _ => diligent_pso::DiligentBackend::Other,
+                        };
+                        let caps = diligent_features::DiligentCaps::derive(&device);
+                        let info = diligent_adapter_info(&device_info, &adapter);
+                        (
+                            Some(DiligentHandle::new(Arc::new(factory))),
+                            Some(DiligentHandle::new(Arc::new(device))),
+                            Some(DiligentHandle::new(Arc::new(context))),
+                            backend,
+                            caps,
+                            Some(info),
+                        )
+                    }
+                    Err(err) => {
+                        bevy_log::warn!("diligent: engine initialization failed ({err})");
+                        (
+                            None,
+                            None,
+                            None,
+                            diligent_pso::DiligentBackend::Other,
+                            None,
+                            None,
+                        )
+                    }
                 }
-                Err(err) => {
-                    bevy_log::warn!("diligent: engine initialization failed ({err})");
-                    (None, None, None, diligent_pso::DiligentBackend::Other, None, None)
-                }
-            }
             },
             Err(err) => {
                 bevy_log::warn!("diligent: engine factory resolution failed ({err})");
-                (None, None, None, diligent_pso::DiligentBackend::Other, None, None)
-            }
+                (
+                    None,
+                    None,
+                    None,
+                    diligent_pso::DiligentBackend::Other,
+                    None,
+                    None,
+                )
+            },
         };
 
     // The capability-derived feature/limit set (M1-4a): the diligent
     // feature mask is intersected with the `WgpuSettings` feature bits
     // (requested/disabled features fold in below - drops bits, never adds).
-    let mut features = caps
-        .as_ref()
-        .map_or(wgpu_types::Features::empty(), |caps| caps.features().as_features())
-        | options.features;
+    let mut features = caps.as_ref().map_or(wgpu_types::Features::empty(), |caps| {
+        caps.features().as_features()
+    }) | options.features;
     if let Some(disabled_features) = options.disabled_features {
         features.remove(disabled_features);
     }
@@ -544,15 +574,19 @@ pub fn initialize_renderer(
     debug!("Configured diligent adapter Features: {:#?}", features);
 
     let device_facade = Device::new(features, limits.clone());
-    let adapter_facade = Adapter::new(adapter_info.clone(), features, limits, downlevel_capabilities);
+    let adapter_facade = Adapter::new(
+        adapter_info.clone(),
+        features,
+        limits,
+        downlevel_capabilities,
+    );
 
     // M3b §8.10: create the in-memory pipeline-state cache (LOAD_STORE).
     // `Err` (no PSO-cache support on D3D11/OpenGL-like devices, or engine
     // init failure) degrades to no cache - PSO creation then simply does not
     // feed `pPSOCache`.
-    let pso_cache = diligent_device
-        .as_deref()
-        .and_then(|device| match device.create_pipeline_state_cache("bevy_pso_cache") {
+    let pso_cache = diligent_device.as_deref().and_then(|device| {
+        match device.create_pipeline_state_cache("bevy_pso_cache") {
             Ok(cache) => {
                 bevy_log::debug!("diligent: pipeline-state cache created (M3b §8.10)");
                 Some(DiligentHandle::new(Arc::new(cache)))
@@ -561,7 +595,8 @@ pub fn initialize_renderer(
                 bevy_log::warn!("diligent: pipeline-state cache unavailable ({err})");
                 None
             }
-        });
+        }
+    });
 
     let render_device = RenderDevice::from_parts(
         diligent_factory,

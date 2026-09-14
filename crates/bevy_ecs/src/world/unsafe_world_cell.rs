@@ -745,6 +745,13 @@ impl<'w> UnsafeWorldCell<'w> {
         unsafe { (*self.ptr).command_queue.clone() }
     }
 
+    /// Advances the world's `last_trigger_id` counter, skipping the `0` sentinel value.
+    ///
+    /// `Observer::last_trigger_id` is initialized to `0`, and the observer runner skips observers
+    /// whose stored id equals the world's current one. A counter that wrapped around to `0` would
+    /// therefore make every freshly registered observer look like it had already run. To keep `0
+    /// reserved as the "never triggered" sentinel, the counter wraps from `u32::MAX` back to `1`.
+    ///
     /// # Safety
     /// It is the caller's responsibility to ensure that there are no outstanding
     /// references to `last_trigger_id`.
@@ -752,7 +759,12 @@ impl<'w> UnsafeWorldCell<'w> {
         self.assert_allows_mutable_access();
         // SAFETY: Caller ensure there are no outstanding references
         unsafe {
-            (*self.ptr).last_trigger_id = (*self.ptr).last_trigger_id.wrapping_add(1);
+            let last_trigger_id = &mut (*self.ptr).last_trigger_id;
+            *last_trigger_id = last_trigger_id.wrapping_add(1);
+            if *last_trigger_id == 0 {
+                // `0` is reserved for observers that have not been triggered yet.
+                *last_trigger_id = 1;
+            }
         }
     }
 

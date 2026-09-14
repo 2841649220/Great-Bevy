@@ -2,7 +2,8 @@
 //!
 //! Tests whether Diligent's D3D12 backend supports asynchronous pipeline
 //! state object (PSO) compilation, per §4.4.7 of the verification plan
-//! ("M1 默认同步，V20 通过后切异步").
+//! (M1 defaults to synchronous PSO creation; asynchronous creation is
+//! enabled once V20 passes).
 //!
 //! Verifies:
 //! 1. `EngineCreateInfo` async shader compilation configuration

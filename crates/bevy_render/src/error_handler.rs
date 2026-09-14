@@ -130,11 +130,9 @@ impl DeviceErrorHandler {
     pub(crate) fn new(device: &RenderDevice) -> Self {
         let fence = device.diligent_device().and_then(|d| {
             match d.create_fence("bevy_device_error_poll_fence") {
-                Ok(fence) => {
-                    Some(crate::renderer::diligent_registry::DiligentHandle::new(
-                        alloc::sync::Arc::new(fence),
-                    ))
-                }
+                Ok(fence) => Some(crate::renderer::diligent_registry::DiligentHandle::new(
+                    alloc::sync::Arc::new(fence),
+                )),
                 Err(err) => {
                     bevy_log::warn!("diligent: device-error probe fence creation failed: {err}");
                     None
@@ -184,9 +182,7 @@ impl DeviceErrorHandler {
             // removed device; the Err branch is its reachable proxy.)
             Err(err) => Some(RenderError {
                 ty: ErrorType::DeviceLost,
-                description: format!(
-                    "Diligent device-removal probe failed (fence poll): {err}"
-                ),
+                description: format!("Diligent device-removal probe failed (fence poll): {err}"),
                 source: None,
             }),
         }

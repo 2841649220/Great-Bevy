@@ -173,7 +173,12 @@ fn cause_error(error: If<Res<RenderError>>, device: Res<RenderDevice>, queue: Re
             });
         }
         RenderError::DeviceLost => {
-            device.wgpu_device().destroy();
+            // The transition wgpu device is gone: on the diligent backend the
+            // device is owned by the engine wrapper and cannot be destroyed
+            // from user code. Device removal is detected by the probe fence
+            // polled inside `RenderDevice::poll`, which is what the render
+            // state machine checks every frame, so polling is all this
+            // example can do to exercise the device-lost path.
             device.poll(PollType::wait_indefinitely()).unwrap();
         }
         RenderError::Loop => {

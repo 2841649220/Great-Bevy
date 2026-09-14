@@ -238,13 +238,18 @@ fn depth_tick(mut state: ResMut<CaptureState>, channel: Res<DepthReadbackChannel
         let Some(job) = state.depth.job.clone() else {
             // Late result for an already-completed frame (e.g. a redundant
             // copy): nothing to save.
-            warn!("depth readback result for frame {} arrived after its job completed", result.frame);
+            warn!(
+                "depth readback result for frame {} arrived after its job completed",
+                result.frame,
+            );
             continue;
         };
         if let Some(err) = result.error {
             error!("depth readback failed for frame {}: {err}", result.frame);
-            state.error =
-                Some(format!("depth readback failed for frame {}: {err}", result.frame));
+            state.error = Some(format!(
+                "depth readback failed for frame {}: {err}",
+                result.frame,
+            ));
         } else {
             match depth::save_depth_exr(
                 &job.scene_dir,
@@ -291,7 +296,12 @@ fn maybe_complete_job(state: &mut CaptureState) {
     match write_sidecar(state) {
         Ok(()) => {
             state.captured += 1;
-            info!("captured frame {} (t={:.2}s) -> {}", frame, state.clock.elapsed().as_secs_f32(), state.out_dir.display());
+            info!(
+                "captured frame {} (t={:.2}s) -> {}",
+                frame,
+                state.clock.elapsed().as_secs_f32(),
+                state.out_dir.display()
+            );
         }
         Err(e) => {
             error!("frame {frame} sidecar write failed: {e}");
@@ -406,8 +416,8 @@ fn write_sidecar(state: &CaptureState) -> Result<(), String> {
             animation_seed: "none for static scenes; DefaultHasher over fixed coords where used".into(),
         },
     };
-    let json = serde_json::to_string_pretty(&meta)
-        .map_err(|e| format!("json serialize failed: {e}"))?;
+    let json =
+        serde_json::to_string_pretty(&meta).map_err(|e| format!("json serialize failed: {e}"))?;
     std::fs::write(&json_path, json).map_err(|e| format!("json write failed: {e}"))?;
     Ok(())
 }
@@ -469,7 +479,10 @@ mod tests {
         state.depth.png_saved = true;
         state.png_saved = true;
         maybe_complete_job(&mut state);
-        assert!(state.depth.job.is_some(), "job completed with depth pending");
+        assert!(
+            state.depth.job.is_some(),
+            "job completed with depth pending"
+        );
         assert!(state.in_flight, "in_flight cleared with depth pending");
 
         // Depth half saved: job completes and releases in_flight.
@@ -491,6 +504,9 @@ mod tests {
         app.insert_resource(state);
         app.add_systems(Update, capture_exit);
         let exit = app.run();
-        assert!(exit.is_success(), "exited while a depth job was pending: {exit:?}");
+        assert!(
+            exit.is_success(),
+            "exited while a depth job was pending: {exit:?}"
+        );
     }
 }

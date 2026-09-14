@@ -1,5 +1,6 @@
 use core::{iter, marker::PhantomData, ops::Range, slice};
 
+use crate::render_resource::BindingResource;
 use crate::{
     render_resource::{AtomicPod, Buffer},
     renderer::{RenderDevice, RenderQueue},
@@ -10,7 +11,6 @@ use encase::{
     ShaderType,
 };
 use thiserror::Error;
-use crate::render_resource::BindingResource;
 use wgpu_types::{BufferAddress, BufferUsages};
 
 use super::GpuArrayBufferable;
@@ -158,12 +158,14 @@ impl<T: NoUninit> RawBufferVec<T> {
         let size = self.item_size * capacity;
         if capacity > self.capacity || (self.changed && size > 0) {
             self.capacity = capacity;
-            self.buffer = Some(device.create_buffer(&crate::render_resource::BufferDescriptor {
-                label: make_buffer_label::<Self>(&self.label),
-                size: size as BufferAddress,
-                usage: BufferUsages::COPY_DST | self.buffer_usage,
-                mapped_at_creation: false,
-            }));
+            self.buffer = Some(
+                device.create_buffer(&crate::render_resource::BufferDescriptor {
+                    label: make_buffer_label::<Self>(&self.label),
+                    size: size as BufferAddress,
+                    usage: BufferUsages::COPY_DST | self.buffer_usage,
+                    mapped_at_creation: false,
+                }),
+            );
             self.changed = false;
         }
     }
@@ -387,12 +389,14 @@ where
         let size = size_of::<T::Blob>() * capacity;
         if capacity > self.capacity || (self.changed && size > 0) {
             self.capacity = capacity;
-            self.buffer = Some(device.create_buffer(&crate::render_resource::BufferDescriptor {
-                label: make_buffer_label::<Self>(&self.label),
-                size: size as BufferAddress,
-                usage: BufferUsages::COPY_DST | self.buffer_usage,
-                mapped_at_creation: false,
-            }));
+            self.buffer = Some(
+                device.create_buffer(&crate::render_resource::BufferDescriptor {
+                    label: make_buffer_label::<Self>(&self.label),
+                    size: size as BufferAddress,
+                    usage: BufferUsages::COPY_DST | self.buffer_usage,
+                    mapped_at_creation: false,
+                }),
+            );
             self.changed = false;
         }
     }
@@ -613,12 +617,14 @@ where
 
         self.capacity = capacity;
         let size = u64::from(T::min_size()) as usize * capacity;
-        self.buffer = Some(device.create_buffer(&crate::render_resource::BufferDescriptor {
-            label: make_buffer_label::<Self>(&self.label),
-            size: size as BufferAddress,
-            usage: BufferUsages::COPY_DST | self.buffer_usage,
-            mapped_at_creation: false,
-        }));
+        self.buffer = Some(
+            device.create_buffer(&crate::render_resource::BufferDescriptor {
+                label: make_buffer_label::<Self>(&self.label),
+                size: size as BufferAddress,
+                usage: BufferUsages::COPY_DST | self.buffer_usage,
+                mapped_at_creation: false,
+            }),
+        );
         self.label_changed = false;
     }
 
@@ -797,12 +803,14 @@ where
 
         self.capacity = capacity;
         let size = self.item_size * capacity;
-        self.buffer = Some(device.create_buffer(&crate::render_resource::BufferDescriptor {
-            label: make_buffer_label::<Self>(&self.label),
-            size: size as BufferAddress,
-            usage: BufferUsages::COPY_DST | self.buffer_usage,
-            mapped_at_creation: false,
-        }));
+        self.buffer = Some(
+            device.create_buffer(&crate::render_resource::BufferDescriptor {
+                label: make_buffer_label::<Self>(&self.label),
+                size: size as BufferAddress,
+                usage: BufferUsages::COPY_DST | self.buffer_usage,
+                mapped_at_creation: false,
+            }),
+        );
 
         self.label_changed = false;
     }
@@ -887,12 +895,14 @@ where
 
         let size = size_of::<T>() * capacity;
         self.capacity = capacity;
-        self.buffer = Some(render_device.create_buffer(&crate::render_resource::BufferDescriptor {
-            label: Some(&self.label),
-            size: size as u64,
-            usage: self.buffer_usages,
-            mapped_at_creation: false,
-        }));
+        self.buffer = Some(render_device.create_buffer(
+            &crate::render_resource::BufferDescriptor {
+                label: Some(&self.label),
+                size: size as u64,
+                usage: self.buffer_usages,
+                mapped_at_creation: false,
+            },
+        ));
     }
 
     /// Writes the buffer to the GPU.

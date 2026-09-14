@@ -111,10 +111,11 @@ impl RenderAsset for GpuImage {
             let new_texture = render_device.create_texture(&image.texture_descriptor);
             if image.copy_on_resize {
                 if let Some(previous) = previous_asset {
-                    let mut command_encoder =
-                        render_device.create_command_encoder(&crate::render_resource::CommandEncoderDescriptor {
+                    let mut command_encoder = render_device.create_command_encoder(
+                        &crate::render_resource::CommandEncoderDescriptor {
                             label: Some("copy_image_on_resize"),
-                        });
+                        },
+                    );
                     let copy_size = Extent3d {
                         width: image
                             .texture_descriptor

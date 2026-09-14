@@ -109,7 +109,8 @@ impl BevyWrapper {
             .main
             .world()
             .resource::<RenderDevice>()
-            .wgpu_device()
+            // The diligent renderer advances its frame lifecycle through `RenderDevice::poll`;
+            // the wgpu-compatible device facade no longer exposes a `poll` method.
             .poll(PollType::Wait {
                 submission_index: None,
                 timeout: None,

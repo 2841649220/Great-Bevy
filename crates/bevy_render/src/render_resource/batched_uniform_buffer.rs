@@ -1,4 +1,5 @@
 use super::{GpuArrayBufferIndex, GpuArrayBufferable};
+use crate::render_resource::BindingResource;
 use crate::{
     render_resource::DynamicUniformBuffer,
     renderer::{RenderDevice, RenderQueue},
@@ -9,7 +10,6 @@ use encase::{
     ShaderType,
 };
 use nonmax::NonMaxU32;
-use crate::render_resource::BindingResource;
 use wgpu_types::Limits;
 
 /// Similar to [`DynamicUniformBuffer`], except every N elements (depending on size)
@@ -32,9 +32,7 @@ pub struct BatchedUniformBuffer<T: GpuArrayBufferable> {
 
 impl<T: GpuArrayBufferable> BatchedUniformBuffer<T> {
     pub fn batch_size(limits: &Limits) -> usize {
-        (limits
-            .max_uniform_buffer_binding_size
-            / T::min_size().get()) as usize
+        (limits.max_uniform_buffer_binding_size / T::min_size().get()) as usize
     }
 
     pub fn new(limits: &Limits) -> Self {
