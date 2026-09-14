@@ -17,3 +17,17 @@
   - `cargo test -j 4 --no-fail-fast -p bevy_ecs -p bevy_tasks -p bevy_time -p bevy_transform -p bevy_platform -p bevy_window` → **exit 0，597 passed / 0 failed**
   - `git ls-files --eol` 异常 0；`git grep -P '\t'` 0 命中
 - **遗留**: clippy 1.98 告警未逐条清理（`doc_markdown` 100 / `std_instead_of_core` 35（core::io 未稳定，有意保留）/ `arc_with_non_send_sync` 24 / `result_large_err` 12 等）；`cargo test --workspace` 未跑全（示例二进制链接受本机内存限制）。
+
+## [04:10] - 文档整理、冗余清理与提交推送
+
+- **文档整理**:
+  - 三份根目录报告（PROJECT.md / DEBUG_REPORT.md / NORMALIZATION_REPORT.md）归档为 `docs/audit/archive/round{1,2,3}-*.md`；
+  - 新建 `docs/audit/README.md` 作为唯一权威入口（当前状态 / 里程碑 / 已修复问题汇总 / 已知限制 / 事故记录 / 归档索引）；
+  - README 文档导览新增审计档案入口；修正过时事实：Rust 工具链 1.85 → 1.95（README 徽章 + 快速启动 + BUILD_GUIDE），
+    clippy 门禁说明由 `-- -D warnings` 改为与当前告警现状一致（存量告警清单指向 docs/audit/README.md §4）。
+- **清理**:
+  - 删除 `.agents/`（89 个多智能体临时文件）、`.workbuddy/`（记忆迁至 `.ai-memory/20260907/daily.md`）；
+  - `.gitignore` 增加 agent 临时目录（`.agents/`、`.workbuddy/`、`.debug_*/`）忽略规则；
+  - `assets/models/aimisi/*.glb`（4 个 / 158 MB / 全仓零引用）**未删除也未提交**，等待用户确认后处置。
+- **提交与推送**: commit `98a36584`（103 files, +4287/-983）→ `git push origin main` 成功（`e724232f..98a36584`）。
+  - 提交内容已核验：不含 `target/`、`third_party/` 或 `.glb` 二进制；工作区仅剩上述待确认资源。
