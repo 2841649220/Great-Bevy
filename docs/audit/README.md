@@ -9,11 +9,11 @@
 
 | 维度 | 状态 | 证据 |
 |---|---|---|
-| 工作区编译 | ✅ 通过 | `cargo check -j 4 --workspace --all-targets` → exit 0，0 error |
-| 编译告警 | ✅ 归零 | 全工作区 **0 条真实告警**（仅剩 `build.rs` 信息性 `cargo:warning`） |
-| 核心 crate 测试 | ✅ 通过 | `cargo test --no-fail-fast -p bevy_ecs -p bevy_tasks -p bevy_transform` → 11 个目标，**1410 passed / 0 failed / 5 ignored** |
+| 工作区编译 | ✅ 通过 | `cargo check -j 4 --workspace --all-targets` → exit 0，0 error（M7 修复编译错误后复跑 2m59s；推送后对同一代码状态再跑 1m03s，均为热缓存。参考：M6 记录冷缓存全量 4m54s） |
+| 编译告警 | ⚠️ 本轮触碰文件归零，存量 10 处上游 deprecation | M7 触碰的 26 个文件在 `cargo check` 中 0 告警（`bevy_render` 的 lib 与 test 目标已按包确认为 0）。全工作区仍有 10 处 `deprecated`，全部位于**本轮未触碰**的文件：**std 常量改名**（`std::f32::INFINITY/MAX/NEG_INFINITY/EPSILON` → 关联常量）与 **`Atomic::fetch_update` → `try_update`**——`bevy_ui/src/ui_node.rs`(5)、`bevy_ecs/src/world/identifier.rs:36`、`bevy_picking/src/window.rs:46`、`bevy_math/src/primitives/half_space.rs:149`、`bevy_core_pipeline/src/core_3d/mod.rs:487`、`bevy_sprite_render/src/sprite_mesh/sprite_material.rs:272`。根因是工具链升级：当前 rustc **1.99.0**（2026-09-28），上一轮记录为 1.98.1，这批弃用与本轮改动无关。上一轮「全工作区 0 条真实告警」的结论在当前工具链下不可复现，据此修正 |
+| 核心 crate 测试 | ✅ 通过（M6 数据，M7 未复跑） | `cargo test --no-fail-fast -p bevy_ecs -p bevy_tasks -p bevy_transform` → 11 个目标，**1410 passed / 0 failed / 5 ignored**。M7 只改 `bevy_render` 与 `diligent-rs` 且这三个 crate 未被触及；`bevy_render` 自身测试目标因需链接 Diligent 静态库在本机不可跑（§4.2），故本轮无新增测试证据 |
 | 开发态运行效率 | ✅ 已修复 | `Cargo.toml` 补 `[profile.dev]` / `[profile.dev.package."*"]`；构建日志由 `[unoptimized + debuginfo]` 变为 `[optimized + debuginfo]` |
-| 格式与换行 | ⚠️ 本轮改动全洁，存量 5 文件未洁 | 本轮改动的全部文件 `cargo fmt --check` 通过；`git ls-files --eol` 全仓 `w/lf`（含本轮新写入文件），无换行churn。存量 5 个**本轮未触碰**的文件不洁，见 §4.7 |
+| 格式与换行 | ⚠️ 本轮改动全洁，存量 2 文件未洁 | 本轮触碰的文件 `cargo fmt -p <pkg> -- --check` 全部通过；`git ls-files --eol` 显示改动文件均 `w/lf`，与 `.gitattributes` 一致，无换行 churn。不洁清单（**均为本轮未触碰文件**）：`bevy_render/src/render_resource/bind_group.rs:90`、`bevy_render/src/renderer/diligent_mapping.rs:766,778`；范围与检查方式见 §4.6 |
 | 注释语言 | ✅ 统一英文 | `crates/` 内仅剩上游日文按键名与 `bevy_reflect` Unicode 测试标识符 |
 | Clippy 告警 | ⚠️ 未清零 | 272 条（`bevy_render` 的 Diligent 迁移代码为主），清单见第 4 节 |
 | 全量测试 | ⚠️ 未跑全 | 示例二进制链接 Diligent 静态库受本机 16 GB 内存限制 |
@@ -30,6 +30,7 @@
 | M4 | 代码质量、lint 与格式化统一 | 全仓 | 完成（clippy 告警见 §4） |
 | M5 | 全工作区验证 | 全仓 | 完成 |
 | M6 | 逐模块审查、告警归零与开发态运行效率治理 | fork 自有代码 + 构建配置 | 完成（见 §3.4、§4） |
+| M7 | Diligent 后端资源生命周期、映射栅栏与上下文锁重入 | `bevy_render` Diligent 路径 + `diligent-rs` | 完成（见 §3.5；无 GPU 运行期证据，见 §4.2/§4.5） |
 
 ---
 
@@ -88,20 +89,40 @@
 
 ---
 
+### 3.5 Diligent 资源生命周期、映射栅栏与上下文锁重入（M7）
+
+| 主题 | 位置 | 修复 |
+|---|---|---|
+| registry 条目永不注销（慢速泄漏 + 已析构资源的裸指针存量） | `bevy_render::renderer::diligent_registry` | 新增 `RegistryRegistration`：随资源 wrapper 共享的注销 token，最后一个 clone 析构时按 `id` 摘除条目。`Buffer`/`Texture`/`WgpuTextureView`/`WgpuSampler` 把该字段声明在 `value` **之前**，利用「字段按声明顺序 drop」保证先注销、后释放原生句柄。取代 §4.3 原先建议的 `Weak`+`upgrade` 方案 |
+| 交换链 back-buffer 视图每帧换指针，无法由某个资源 wrapper 的 `Arc` 承载 | `bevy_render::view::window` | `reserve_texture_view` 先发放 token、再由 `create_transition_texture_view` 挂接；`SurfaceData::Drop` 在世界关闭与表面重建路径上，于原生视图释放前 `clear_texture_view` |
+| 整-pass 持锁与逐命令持锁自死锁 | `diligent_registry::context_guard` | `CONTEXT_LOCK` 改为**每线程可重入**（thread-local 深度计数，深度回到 0 才真正释放 `MutexGuard`）。render pass 在 begin→record→end 全程持有 `ContextGuard`（存入 `wgpu_compat::{RenderPass, ComputePass}` 与 `TrackedRenderPassInner::Diligent`），`diligent_draw::context_methods` 等逐命令 guard 变为重入；其它渲染系统仍被进程级锁串行化 |
+| `MapBuffer(do_not_wait = false)` 被当作「已等待前序 GPU 工作」 | `render_device::wait_for_gpu` | Diligent 的 D3D12 后端并**不保证**该语义（`diligent-rs::context` 的文档已改写）。四处阻塞映射改为先 `create_fence` → `enqueue_signal` → `flush` → `fence.wait`，再以 `MAP_FLAG_DO_NOT_WAIT` 映射：`RenderDevice::map_buffer`、`CommandEncoder::run_pending_map`、`BufferSlice::map_async_blocking`、`texture::execute_texture_readback` |
+| `clear_buffer` 只打日志的桩 | `wgpu_compat::CommandEncoder::clear_buffer` | 以分块（64 KiB 零缓冲）`UpdateBuffer` 实现；先校验 offset/size 的 4 字节对齐、`offset+size` 溢出与越界，失败一律 warn 并返回 |
+| 队列上下文挂载点错位 + 能力未校验 | `renderer/mod.rs`、`settings.rs` | `RenderQueue::attach` 从每帧 `render_system` 移到 `RenderResources` 解包处（同时覆盖设备恢复后重新挂载），并去掉「只挂一次」的短路；`RenderCreation::Automatic` 发布资源前校验 DX12 backend、是否产出 device、`features & !disabled_features` 是否被当前兼容路径支持，任一不满足则告警并拒绝初始化 |
+| feature mask 声称未实现的能力 | `renderer/diligent_features.rs` | 收回 `EXPERIMENTAL_RAY_QUERY`、`EXTENDED_ACCELERATION_STRUCTURE_VERTEX_FORMATS`、`ACCELERATION_STRUCTURE_BINDING_ARRAY`、`TIMESTAMP_QUERY*`、`EXPERIMENTAL_MESH_SHADER`、`CLEAR_TEXTURE`（AS 创建/构建、时间戳写入与解析、mesh pipeline stage 在兼容层均为空实现，native 支持不再等于可暴露）；对应单测断言由「contains」改为「不 intersects」 |
+| `MappedBuffer`/`MappedTexture` 只借用 context、不借用被映射对象 | `diligent-rs::context` | `map_buffer`/`map_texture_subresource` 返回值的 `PhantomData` 同时借用 `&'a Buffer`/`&'a Texture`，防止映射期间对象提前释放 |
+| `SwapChain::resize` 会在调用中释放借出的 RTV/DSV | `diligent-rs::swapchain` | 改为 `unsafe fn` 并写明调用方义务（失效所有借出视图、确保无命令仍引用旧缓冲）；`view/window` 两处调用点补 `SAFETY` 注释并「先摘 registry 条目、再 resize」 |
+| 串行 `mark_dirty_trees` 遇层级环会无限循环 | `bevy_transform::systems` | 每个起点用 `BTreeSet` 工作集，命中重复即告警跳出（此前只有并行路径带环保护） |
+| 验证时暴露的类型错误 | `render_resource/buffer.rs:272` | 首轮 `cargo check` 报 **E0599**：对 `diligent_rs::RenderDevice` 调用了只存在于 bevy_render `RenderDevice` 上的 `wait_for_gpu`。抽出以原生句柄为参数的自由函数 `render_device::wait_for_gpu(device, context)`，方法改为委托，`BufferSlice` 路径直接调用它 |
+
+---
+
 ## 4. 已知限制（未完成项）
 
-1. **Clippy 告警 272 条**（clippy 1.98，集中在 `bevy_render` 的 Diligent 迁移代码）：
+1. **Clippy 告警 272 条**（clippy 1.98，集中在 `bevy_render` 的 Diligent 迁移代码；**该计数为 M6 时点**，工具链已升至 1.99.0 后未复测，M7 未新增 clippy 运行）：
    - `doc_markdown` 100 条（文档反引号）、`std_instead_of_core` 35 条（`core::io` 未稳定，**有意保留**）、
    - `arc_with_non_send_sync` 24 条、`result_large_err` 12 条、`is_multiple_of` 6 条，以及示例/工具类零散告警。
 2. **`cargo test --workspace` 未跑全**：示例二进制链接 ~70 MB Diligent 静态库（LTCG）受本机内存/磁盘限制；库与核心测试目标全部通过。
-3. **`ResourceRegistry` 无移除路径（慢速内存增长 + 悬垂存量）**：`bevy_render::renderer::diligent_registry` 是进程级 `OnceLock`，只有 `register_*`/`resolve_*`，没有注销。
-   而 `define_atomic_id!` 用 `fetch_add` 单调发号、**id 永不复用**，因此模块文档中“re-registration overwrites stale entries / 只有 id 复用才会命中陈旧项”的论证与事实不符。
-   后果：① 条目随累计创建无限增长（存活期与进程同长）；② 已析构资源的裸指针永久留存。因 id 不复用，当前**不构成 UAF**，属慢速泄漏。
-   建议修复（未做，需先建验证路径）：存储侧改存 `Weak`，`resolve_*` 时 `upgrade()` —— 既能在失败时惰性剔除陈旧项，又能让 resolve 返回强引用从而彻底消除悬垂隐患。
+3. **registry 仍返回裸指针，安全性依赖调用方的借用**（M7 部分收敛）：`RegistryRegistration` 消除了「条目随累计创建无限增长」与「已析构资源的指针永久留存」，但 `resolve_*` 依旧返回 `*mut`，注册表自身不提供强引用。
+   因此仍要求：查询期间使用方持有 wrapper 借用（`BindGroupEntry` 在 `create_bind_group` 期间借用、逐 draw 经 `BufferSlice`/`TextureView` 借用）。若未来出现「跨线程在 resolve 之后才使用裸指针」的路径，需要改为 `Weak` + `upgrade()` 返回强引用。
+   另有两点存量特性：进程级 `OnceLock` 使多个 device 共享同一张表（按全局唯一 id 键控，故不会互相命中）；`define_atomic_id!` 的 `fetch_add` 单调发号、id 永不复用。
 4. **`Cargo.lock` 未纳入版本控制**：`.gitignore` 忽略 `Cargo.lock`（继承自上游“库”定位），但本仓库交付引擎与示例，构建不可复现、依赖会漂移。建议 `git add -f Cargo.lock` 并移除该忽略规则（属仓库策略变更，待确认）。
-5. **LLD 链接 Diligent 静态库未验证**：`third_party/diligent-build` 中的 `DiligentCore.lib`（565 MB）以 MSVC LTCG（`/GL`）构建，LLD 对 LTCG 目标文件支持有限。本轮只验证了不链接 Diligent 的目标（`cargo check` 全工作区、三者核心 crate 测试全部通过并成功链接）。若链接 Diligent 的目标失败，删除 `.cargo/config.toml` 即可回退（代价是链接变慢，不影响正确性）。
-7. **存量 `cargo fmt --check` 不洁（5 文件，本轮未触碰）**：`bevy_render::render_resource::bind_group`、`bevy_render::render_resource::texture`、`bevy_render::renderer::diligent_draw:652`、`diligent-rs/build.rs`、`diligent-rs/examples/triangle.rs`、`diligent-sys/build.rs`。这些文件本轮均未修改，diff 形态（match 臂尾逗号、链式调用换行、fn 签名单行化）符合 rustfmt 版本漂移特征（`rustfmt.toml` 固定 `style_edition = "2021"`，当前 rustfmt 为 1.9.0-stable / 工具链 1.98.1）。**未执行 `cargo fmt`**：会引入与本轮无关的大面积 diff，且可能与 CI 期望的 rustfmt 版本冲突，需先确认应当以哪个 rustfmt 版本为准。据此，§1 中“全部包 fmt 通过”的原结论应修正为上述表述。
-8. **`CONTEXT_LOCK` 全局串行化**：`diligent_registry::context_guard()` 为每一次 Diligent 立即上下文调用加全局 `Mutex`。diligent-rs 明确记录立即上下文**非线程安全**（引擎录制到单条 D3D12 命令列表），故当前串行化是**正确性所需**；但渲染世界调度是多线程的，这是渲染录制的结构性瓶颈。彻底消除需让渲染图在单线程上录制，属架构级改动，未做。
+5. **LLD 链接 Diligent 静态库未验证**：`third_party/diligent-build` 中的 `DiligentCore.lib`（565 MB）以 MSVC LTCG（`/GL`）构建，LLD 对 LTCG 目标文件支持有限。M6/M7 两轮都只验证了不链接 Diligent 的目标（全工作区 `cargo check`、`bevy_ecs`/`bevy_tasks`/`bevy_transform` 测试可执行文件成功链接）。若链接 Diligent 的目标失败，删除 `.cargo/config.toml` 即可回退（代价是链接变慢，不影响正确性）。
+6. **存量 `cargo fmt --check` 不洁（2 文件，本轮未触碰）**：`bevy_render/src/render_resource/bind_group.rs:90`、`bevy_render/src/renderer/diligent_mapping.rs:766,778`。
+   **检查范围说明**：本机无法运行全仓 `cargo fmt --all --check`——rustfmt 会因 Windows 命令行长度上限失败（`文件名或扩展名太长。 (os error 206)`），故存量清单只能按包统计；本轮涉及的 6 个包已逐包检查，除上述两文件外均干净。上一轮清单里的 `render_resource/texture.rs`、`diligent_draw.rs:652`、`diligent-rs/examples/triangle.rs` 在本轮被修改后已转为干净，`diligent_mapping.rs` 是新暴露的存量项。
+   diff 形态（match 臂尾逗号、链式调用换行）符合 rustfmt 版本漂移特征：`rustfmt.toml` 固定 `style_edition = "2021"`，当前 rustfmt 为 **1.10.0-stable**（随 rustc 1.99.0），上一轮记录为 1.9.0-stable。**依旧有意不执行 `cargo fmt`**：会产生与本轮无关的大面积 diff，需先确认基准 rustfmt 版本。
+7. **`CONTEXT_LOCK` 全局串行化**：`diligent_registry::context_guard()` 为每一次 Diligent 立即上下文调用加全局 `Mutex`。diligent-rs 明确记录立即上下文**非线程安全**（引擎录制到单条 D3D12 命令列表），故当前串行化是**正确性所需**；但渲染世界调度是多线程的，这是渲染录制的结构性瓶颈。M7 只把它改成「同一线程可重入」，使整-pass 持锁与逐命令持锁不再自死锁，**并未改变跨线程互斥**。彻底消除需让渲染图在单线程上录制，属架构级改动，未做。
+8. **M7 改动无 GPU 运行期证据**：fence 等待、可重入上下文锁、`clear_buffer` 的真实 `UpdateBuffer` 路径、以及 feature mask 收回后受影响插件（`bevy_solari` 的光线查询、时间戳诊断）的降级行为，都只有类型检查级验证。受 §4.2 的链接限制，本机连 `bevy_render` 的测试二进制也无法产出；这些路径需要能在目标机运行示例后才能确认。
 
 ---
 
