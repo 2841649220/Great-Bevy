@@ -982,7 +982,7 @@ mod tests {
                 // scope's panic path from turning a panic into a hang.
                 scope.spawn(async move {
                     started.fetch_add(1, Ordering::SeqCst);
-                    crate::futures_lite::future::pending::<()>().await;
+                    futures_lite::future::pending::<()>().await;
                     finished.fetch_add(1, Ordering::SeqCst);
                 });
                 panic!("intentional panic inside scope closure");

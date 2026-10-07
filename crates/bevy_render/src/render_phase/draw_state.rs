@@ -118,6 +118,9 @@ enum TrackedRenderPassInner<'a> {
     /// (`BeginRenderPass` was issued; `EndRenderPass` runs in `Drop`).
     Diligent {
         context: &'a diligent_rs::DeviceContext,
+        /// Keeps the immediate context exclusively owned from pass begin to
+        /// pass end. The per-command guards are reentrant on this thread.
+        _context_guard: crate::renderer::diligent_registry::ContextGuard,
         /// Set when a command could not be represented on the diligent path
         /// (e.g. a pipeline without a diligent PSO). Draws are then skipped
         /// (with a debug log) instead of running against stale state.
@@ -145,6 +148,19 @@ impl<'a> TrackedRenderPass<'a> {
     /// Tracks a pass that was begun on the Diligent immediate context
     /// (M1-3; `BeginRenderPass` was already issued by the caller).
     pub fn diligent(device: &RenderDevice, context: &'a diligent_rs::DeviceContext) -> Self {
+        Self::diligent_locked(
+            device,
+            context,
+            crate::renderer::diligent_registry::context_guard(),
+        )
+    }
+
+    /// Tracks a pass while retaining the lock acquired before `BeginRenderPass`.
+    pub(crate) fn diligent_locked(
+        device: &RenderDevice,
+        context: &'a diligent_rs::DeviceContext,
+        context_guard: crate::renderer::diligent_registry::ContextGuard,
+    ) -> Self {
         let limits = device.limits();
         let max_bind_groups = limits.max_bind_groups as usize;
         let max_vertex_buffers = limits.max_vertex_buffers as usize;
@@ -157,6 +173,7 @@ impl<'a> TrackedRenderPass<'a> {
             immediate: None,
             inner: TrackedRenderPassInner::Diligent {
                 context,
+                _context_guard: context_guard,
                 poisoned: false,
             },
         }

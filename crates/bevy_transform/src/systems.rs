@@ -146,9 +146,19 @@ pub fn mark_dirty_trees(
 
     // Simple serial implementation that iterates changed entities and traverses the tree.
     #[cfg(not(feature = "multi_threaded"))]
+    let mut visited = alloc::collections::BTreeSet::new();
+    #[cfg(not(feature = "multi_threaded"))]
     for entity in changed.iter().chain(orphaned.read()) {
         let mut next = entity;
-        while let Ok(mut tree) = transforms.get_mut(next) {
+        visited.clear();
+        loop {
+            if !visited.insert(next) {
+                warn!("Hierarchy cycle detected while marking transform tree for entity {next:?}");
+                break;
+            }
+            let Ok(mut tree) = transforms.get_mut(next) else {
+                break;
+            };
             if tree.is_changed() && !tree.is_added() {
                 // If the component was changed, this part of the tree has already been processed.
                 // Ignore this if the change was caused by the component being added.
@@ -480,7 +490,10 @@ mod serial {
                         changed,
                     } => (entity, parent_global, changed),
                 };
-                #[expect(unsafe_code, reason = "`propagate_recursive()` is unsafe due to its use of `Query::get_unchecked()`.")]
+                // (The `unsafe_code` expectation that used to sit here belonged to the
+                // recursive implementation; the explicit work-stack rewrite left it
+                // attached to an `if` that contains no unsafe code. The live
+                // expectation is the one guarding `get_unchecked` below.)
                 if !traversal.ancestor_set.insert(entity) {
                     warn!(
                         "Hierarchy cycle detected: entity {entity:?} is already an ancestor; breaking out safely to prevent infinite recursion"
@@ -863,7 +876,7 @@ mod parallel {
 mod test {
     use alloc::{vec, vec::Vec};
     use bevy_app::prelude::*;
-    use bevy_ecs::{prelude::*, world::CommandQueue};
+    use bevy_ecs::world::CommandQueue;
     use bevy_math::{vec3, Vec3};
     use bevy_tasks::{ComputeTaskPool, TaskPool};
 

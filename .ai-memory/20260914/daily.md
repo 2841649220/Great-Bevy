@@ -39,3 +39,46 @@
 - **磁盘**：C 盘可用空间 41.61 GB → 67.35 GB（释放 25.74 GB）。
 - **仓库状态**：`git status` 干净；顶层不再包含 `.agents/`、`.workbuddy/`、`target/` 与临时报告。
 - **注意**：构建缓存已清空，下次 `cargo build/test` 需全量重编译（数十分钟以上）；已提交并推送的代码状态不受影响。
+## [15:40] - Review/Debug/性能治理（Bevy 仓库本轮 · 模块化审查 + 高效运行）
+
+- **范围**: 全仓 1848 个 `.rs`；重点为 fork 自有代码 (~20k 行: `crates/diligent-rs` 12k / `crates/diligent-sys` 1k / `bevy_render` Diligent 迁移 4.4k + 27 个集成文件)，上游 Bevy 代码按已知缺陷史定向复核。
+- **基线**: 冷缓存 `cargo check -j 4 --workspace --all-targets` → exit 0，4m54s，0 error，9 条真实告警。
+
+- **修复（已编译验证，exit 0）**:
+  1. `bevy_ecs/src/observer/runner.rs` 嵌套 fn 后多余分号 → 去除。
+  2. `bevy_tasks/src/task_pool.rs` 冗余 `crate::` 限定 → 去除。
+  3. `bevy_transform/src/systems.rs` 测试模块未使用 glob 导入 → 收窄为 `use bevy_ecs::world::CommandQueue`。
+  4. `bevy_ecs/src/entity/mod.rs` `EntityIndex::from_bits` 仅测试可达 → 加 `#[allow(dead_code, reason=...)]`（不用 `expect`，否则 test target 会报 unfulfilled）。
+  5. `diligent-sys/src/lib.rs` bindgen 重声明 C 运行时符号（strlen/mem*）触发 `suspicious_runtime_symbol_definitions` ×5 → 模块级 `#[allow]`（**注意：lint 名不是 `clashing_extern_declarations`**）。
+
+- **效率修复（核心交付）**:
+  1. `Cargo.toml` 新增 `[profile.dev] opt-level=1` + `[profile.dev.package."*"] opt-level=3`。此前 dev 全链路 `opt-level=0`，引擎依赖（ECS/渲染/数学）全部未优化 —— 这是"运行不高效"的根因。构建日志由 `[unoptimized + debuginfo]` 变为 `[optimized + debuginfo]`。
+  2. 新建 `.cargo/config.toml`（gitignored，本地开发配置），启用仓库自带 `config_fast_builds.toml` 的 Windows LLD 链接器；已用 `rustc -C linker=rust-lld.exe` 冒烟验证通过。
+  3. `bevy_render/src/renderer/diligent_draw.rs`：`std::env::var_os("DILIGENT_RS_NO_RESOLVE")` 原位于 `begin_tracked_render_pass`（每帧多次）内，两处 → 提为 `OnceLock` 缓存 helper `msaa_resolve_disabled()`。Windows 下 `var_os` 每次取进程环境锁并分配。
+  4. `diligent_registry.rs`：4 个 `Mutex<HashMap>` → `RwLock<HashMap>`（resolve 侧在逐 draw 热路径，读远多于写）；全部 registry 锁与 `CONTEXT_LOCK` 改为 poison-tolerant（`unwrap_or_else(PoisonError::into_inner)`），避免一次 panic 永久毒化后整个渲染器再也无法使用。
+
+- **健全性修复**: `diligent-rs/src/handle.rs` `NonOwning<T>` 补 `'a` 生命周期 + `PhantomData<&'a T>`，手工实现 `Clone`/`Copy`（原 `derive` 会强加多余 `T: Copy` 约束）。此前文档声称"tied to the owning object"但类型无生命周期，`as_ref()` 是安全 fn 却可在 owner drop 后产生 UB。已同步 `context.rs` / `swapchain.rs` / `texture.rs` 三处签名。
+
+- **验证**:
+  - `cargo check -j 4 --workspace --all-targets` → **exit 0，0 error，0 代码告警**（8m55s，新 profile 下）
+  - `cargo check -p diligent-sys` → **exit 0，0 告警**（仅剩 build.rs 信息性 cargo:warning）
+  - 核心 crate 测试见下一条记录。
+
+- **已知限制 / 未验证项**:
+  1. LLD 链接器对 `third_party/diligent-build` 中 LTCG（/GL）静态库的兼容性未验证 —— 链接 DiligentCore 的目标（bevy_render 测试、examples）未跑；失败时删除 `.cargo/config.toml` 即可回退。
+  2. dev profile `opt-level=3` 使 `cargo check` 由 4m54s 增至 8m55s（约 1.8×），换取运行期大幅提速；属标准 Bevy 取舍。
+  3. `ResourceRegistry` 无移除路径且 id 单调不复用（`define_atomic_id!` 为 `fetch_add`），进程级 `OnceLock` 导致条目随累计创建无限增长，存量为悬垂指针；因 id 不复用故当前不构成 UAF，属慢速内存增长。修复需生命周期化（存 `Weak` + resolve 时 upgrade，同时消除悬垂隐患），本轮未做。
+  4. `Cargo.lock` 被 `.gitignore` 忽略且未入版本控制 → 构建不可复现，建议 `git add -f Cargo.lock` 并移除忽略规则（待用户决策）。
+## [16:20] - 本轮最终验证与自查结论
+
+- **验证证据（全部 exit 0）**:
+  - `cargo check -j 4 --workspace --all-targets` → **exit 0，0 error，0 真实告警，0 unfulfilled lint expectation**
+  - `cargo check -p diligent-sys` → exit 0，**0 告警**（5 条 `suspicious_runtime_symbol_definitions` 已清除）
+  - `cargo check -p bevy_render --all-targets` → exit 0（覆盖 diligent-rs + diligent_draw 的最终改动）
+  - `cargo test -j 4 --no-fail-fast -p bevy_ecs -p bevy_tasks -p bevy_transform` → **exit 0，11 个目标全 ok，1410 passed / 0 failed / 5 ignored**（含 doc-test）
+- **自查发现并修正的自身问题**:
+  1. 写入 `handle.rs` 文档时误留 10 处**字面量** `\``（反斜杠+反引号），会使 intra-doc 链接 `[`NonOwning::as_ref`]` 失效 → 已全部还原为普通反引号，并复查全部改动 `.rs` 文件确认归零。
+  2. `diligent_draw.rs` 新增 helper 与其后文档注释之间缺空行 → 已补。
+- **换行安全（吸取 2026-09-14 事故教训）**: 本轮全部为定点 `edit` 补丁，未做任何批量文本改写；`git diff --stat` 显示仅插入/局部替换，**无换行 churn**；`git ls-files --eol` 显示全部改动文件 `w/lf`，与 `.gitattributes` 的 `*.rs/*.toml text eol=lf` 一致。
+- **新增发现（未修，已记入 docs/audit/README.md §4.7）**: 存量 5+1 个**本轮未触碰**文件不满足当前 `cargo fmt --check`（`bind_group.rs`、`render_resource/texture.rs`、`diligent_draw.rs:652`、`diligent-rs/build.rs`、`diligent-rs/examples/triangle.rs`、`diligent-sys/build.rs`）。diff 形态符合 rustfmt 版本漂移（`style_edition = "2021"`，当前 rustfmt 1.9.0-stable）。**有意未执行 `cargo fmt`**：会产生与本轮无关的大面积 diff，需先确认基准 rustfmt 版本。据此修正了 audit §1 中“全部包 fmt 通过”的原表述。
+- **改动清单**: 14 文件，+189 / -51（含 `.ai-memory` 与 `docs/audit/README.md`）；`.cargo/config.toml` 为 gitignored 的本地配置，不计入。

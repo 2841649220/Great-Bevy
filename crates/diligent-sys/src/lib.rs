@@ -64,6 +64,14 @@
 #![allow(clippy::missing_safety_doc)]
 
 /// The complete generated FFI surface.
+///
+/// `suspicious_runtime_symbol_definitions`: bindgen re-declares the C runtime
+/// entry points (`strlen`, `memcmp`, `memcpy`, `memmove`, `memset`) that
+/// Diligent's headers transitively pull in. On Windows x64 the generated
+/// `-> u64` return type is ABI-identical to the standard library's `-> usize`
+/// (`size_t` is `unsigned long long` there), so the mismatch is cosmetic -
+/// silence it here rather than at every use site.
+#[allow(suspicious_runtime_symbol_definitions)]
 pub mod bindings {
     include!(concat!(env!("OUT_DIR"), "/bindings.rs"));
 }

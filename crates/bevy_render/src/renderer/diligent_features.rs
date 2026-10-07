@@ -103,10 +103,11 @@ fn shader_model(device_info: &sys::RenderDeviceInfo) -> (u32, u32) {
 /// * **Draw-command bits** - `GraphicsAdapterInfo.DrawCommand.CapFlags`
 ///   (`EngineFactoryD3DBase.hpp:261-268`, `EngineFactoryD3D12.cpp:1104-1117`).
 /// * **Shader-model-gated bits** - `MaxShaderVersion.HLSL`; wgpu gates
-///   `SHADER_INT64` on SM 6.0, `EXPERIMENTAL_RAY_QUERY` on SM 6.5 +
-///   ray-tracing tier 1.1, and the int64-atomics on SM 6.6
+///   `SHADER_INT64` on SM 6.0 and int64 atomics on SM 6.6
 ///   (`wgpu-hal/src/dx12/adapter.rs:564-680`). Diligent exposes no direct
-///   int64-atomic query, so the shader model is the recorded proxy.
+///   int64-atomic query, so the shader model is the recorded proxy. Native
+///   ray-query support is intentionally withheld until the compatibility
+///   path implements the corresponding operations.
 fn d3d12_feature_bits(
     device_info: &sys::RenderDeviceInfo,
     adapter_info: &sys::GraphicsAdapterInfo,
@@ -117,7 +118,6 @@ fn d3d12_feature_bits(
     let mut bits = Features::DEPTH32FLOAT_STENCIL8
         | Features::ADDRESS_MODE_CLAMP_TO_BORDER
         | Features::ADDRESS_MODE_CLAMP_TO_ZERO
-        | Features::CLEAR_TEXTURE
         | Features::TEXTURE_FORMAT_16BIT_NORM
         | Features::PRIMITIVE_INDEX
         | Features::RG11B10UFLOAT_RENDERABLE
@@ -144,13 +144,8 @@ fn d3d12_feature_bits(
     if feature_state_enabled(features.DualSourceBlend) {
         bits |= Features::DUAL_SOURCE_BLENDING;
     }
-    if feature_state_enabled(features.TimestampQueries) {
-        // D3D12 allows timestamps inside passes and encoders
-        // (wgpu-hal dx12 adapter.rs:469-471).
-        bits |= Features::TIMESTAMP_QUERY
-            | Features::TIMESTAMP_QUERY_INSIDE_ENCODERS
-            | Features::TIMESTAMP_QUERY_INSIDE_PASSES;
-    }
+    // The Diligent compatibility layer currently has no timestamp query
+    // implementation, even when the native device supports timestamps.
     if feature_state_enabled(features.TextureCompressionBC) {
         bits |= Features::TEXTURE_COMPRESSION_BC | Features::TEXTURE_COMPRESSION_BC_SLICED_3D;
     }
@@ -177,19 +172,8 @@ fn d3d12_feature_bits(
         bits |= Features::SUBGROUP;
     }
 
-    // Ray queries: ray tracing tier 1.1 (inline ray tracing) + SM 6.5,
-    // mirroring wgpu (wgpu-hal dx12 adapter.rs:604-623).
-    if feature_state_enabled(features.RayTracing)
-        && adapter_info.RayTracing.CapFlags
-            & (sys::_RAY_TRACING_CAP_FLAGS::RAY_TRACING_CAP_FLAG_INLINE_RAY_TRACING
-                as sys::RAY_TRACING_CAP_FLAGS)
-            != 0
-        && (sm_major, sm_minor) >= (6, 5)
-    {
-        bits |= Features::EXPERIMENTAL_RAY_QUERY
-            | Features::EXTENDED_ACCELERATION_STRUCTURE_VERTEX_FORMATS
-            | Features::ACCELERATION_STRUCTURE_BINDING_ARRAY;
-    }
+    // Ray-query and acceleration-structure creation/build are not wired by
+    // the Diligent compatibility layer, so native RT support is not exposed.
 
     if sm_major >= 6 {
         // SM 6.0 + Int64ShaderOps (wgpu-hal dx12 adapter.rs:564-569);
@@ -206,9 +190,7 @@ fn d3d12_feature_bits(
             | Features::TEXTURE_INT64_ATOMIC;
     }
 
-    if feature_state_enabled(features.MeshShaders) {
-        bits |= Features::EXPERIMENTAL_MESH_SHADER;
-    }
+    // Mesh-shader pipeline stages are not implemented by the PSO adapter.
     if feature_state_enabled(features.ShaderBarycentrics) {
         bits |= Features::SHADER_BARYCENTRICS;
     }
@@ -487,19 +469,25 @@ mod tests {
                 | Features::SAMPLED_TEXTURE_AND_STORAGE_BUFFER_ARRAY_NON_UNIFORM_INDEXING
                 | Features::PARTIALLY_BOUND_BINDING_ARRAY
         ));
-        // EXPERIMENTAL_RAY_QUERY: bevy_solari/lib.rs:52.
-        assert!(mask.contains(Features::EXPERIMENTAL_RAY_QUERY));
+        // Native ray tracing is not exposed while AS creation/build are no-ops.
+        assert!(!mask.intersects(
+            Features::EXPERIMENTAL_RAY_QUERY
+                | Features::EXTENDED_ACCELERATION_STRUCTURE_VERTEX_FORMATS
+                | Features::ACCELERATION_STRUCTURE_BINDING_ARRAY
+        ));
         // MULTI_DRAW_INDIRECT_COUNT: render_phase/mod.rs:1094,
         // gpu_preprocess.rs:1578.
         assert!(mask.contains(Features::MULTI_DRAW_INDIRECT_COUNT));
         // DUAL_SOURCE_BLENDING: atmosphere/resources.rs:382.
         assert!(mask.contains(Features::DUAL_SOURCE_BLENDING));
-        // Timestamp diagnostics (internal.rs:244-294).
-        assert!(mask.contains(
+        // No timestamp write/resolve path is implemented yet.
+        assert!(!mask.intersects(
             Features::TIMESTAMP_QUERY
                 | Features::TIMESTAMP_QUERY_INSIDE_PASSES
                 | Features::TIMESTAMP_QUERY_INSIDE_ENCODERS
         ));
+        assert!(!mask.contains(Features::CLEAR_TEXTURE));
+        assert!(!mask.contains(Features::EXPERIMENTAL_MESH_SHADER));
         // CompressedImageFormats (settings.rs:193) - BC yes...
         assert!(mask.contains(Features::TEXTURE_COMPRESSION_BC));
         // ...ETC2/ASTC no (D3D12, matching wgpu).
@@ -534,7 +522,7 @@ mod tests {
         let mut device_65 = device;
         device_65.MaxShaderVersion.HLSL = sys::Version { Major: 6, Minor: 5 };
         let features_65 = DiligentFeatures::derive_from_info(&device_65, &adapter).unwrap();
-        assert!(features_65.contains(Features::EXPERIMENTAL_RAY_QUERY));
+        assert!(!features_65.contains(Features::EXPERIMENTAL_RAY_QUERY));
         assert!(features_65.contains(Features::SHADER_INT64));
         assert!(!features_65.contains(Features::TEXTURE_INT64_ATOMIC));
 

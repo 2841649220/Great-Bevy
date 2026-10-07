@@ -17,6 +17,10 @@ define_atomic_id!(BufferId);
 #[derive(Clone)]
 pub struct Buffer {
     pub(crate) id: BufferId,
+    /// Removes the non-owning registry pointer after the last buffer clone drops.
+    /// Declared before `value` so the entry is removed before its handle releases.
+    pub(crate) _registry_registration:
+        Option<Arc<crate::renderer::diligent_registry::RegistryRegistration>>,
     /// The Diligent buffer. `None` only when the Diligent creation failed
     /// (logged).
     pub(crate) value: Option<DiligentHandle<diligent_rs::Buffer>>,
@@ -27,6 +31,8 @@ pub struct Buffer {
     /// The diligent immediate context of the creating device (used by the
     /// blocking map paths; the handle is `Send + Sync`).
     pub(crate) context_handle: Option<DiligentHandle<diligent_rs::DeviceContext>>,
+    /// The Diligent device needed to fence GPU work before a blocking map.
+    pub(crate) device_handle: Option<DiligentHandle<diligent_rs::RenderDevice>>,
     /// The mapped readback data (set by `RenderDevice::map_buffer` /
     /// `CommandEncoder::map_buffer_on_submit`; cleared by `unmap`).
     pub(crate) mapped: Arc<Mutex<Option<Vec<u8>>>>,
@@ -247,6 +253,9 @@ impl<'a> BufferSlice<'a> {
         let Some(diligent) = buffer.diligent() else {
             return Err(crate::render_resource::BufferAsyncError);
         };
+        let Some(device) = buffer.device_handle.as_deref() else {
+            return Err(crate::render_resource::BufferAsyncError);
+        };
         let map_type = match mode {
             crate::render_resource::MapMode::Read => {
                 diligent_rs::diligent_sys::bindings::_MAP_TYPE::MAP_READ as _
@@ -260,8 +269,12 @@ impl<'a> BufferSlice<'a> {
         // above takes its own guard inside `execute_texture_readback`, so
         // this guard must stay scoped to the direct map).
         let _guard = crate::renderer::diligent_registry::context_guard();
+        crate::renderer::render_device::wait_for_gpu(device, context).map_err(|err| {
+            bevy_log::warn!("diligent: waiting before buffer map failed: {err}");
+            crate::render_resource::BufferAsyncError
+        })?;
         let mapped = context
-            .map_buffer(diligent, map_type, false)
+            .map_buffer(diligent, map_type, true)
             .map_err(|_| crate::render_resource::BufferAsyncError)?;
         let Some(mapped) = mapped else {
             return Err(crate::render_resource::BufferAsyncError);

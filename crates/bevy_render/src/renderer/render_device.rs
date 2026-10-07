@@ -19,6 +19,26 @@ use diligent_rs::diligent_sys::bindings as sys;
 use std::sync::{Mutex, Weak};
 use wgpu_types::{BindGroupLayoutEntry, BufferBindingType, PollError, PollStatus};
 
+/// Flushes prior immediate-context work and waits for a fence queued after it.
+///
+/// Diligent's D3D12 backend does not guarantee that `MapBuffer` with
+/// `DO_NOT_WAIT` cleared waits for previously recorded GPU work, so callers
+/// that need completion must fence first. Keep the context lock held from here
+/// through the following map so no command can be inserted between them.
+pub(crate) fn wait_for_gpu(
+    device: &diligent_rs::RenderDevice,
+    context: &diligent_rs::DeviceContext,
+) -> Result<(), String> {
+    let fence = device
+        .create_fence("bevy_blocking_map")
+        .map_err(|err| err.to_string())?;
+    context
+        .enqueue_signal(&fence, 1)
+        .map_err(|err| err.to_string())?;
+    context.flush();
+    fence.wait(1).map_err(|err| err.to_string())
+}
+
 /// This GPU device is responsible for the creation of most rendering and compute resources.
 ///
 /// M1b: the device wraps a Diligent [`RenderDevice`](diligent_rs::RenderDevice) +
@@ -100,6 +120,26 @@ impl RenderDevice {
     /// initialize).
     pub(crate) fn diligent_device(&self) -> Option<&diligent_rs::RenderDevice> {
         self.diligent_device.as_deref()
+    }
+
+    pub(crate) fn diligent_device_handle(
+        &self,
+    ) -> Option<DiligentHandle<diligent_rs::RenderDevice>> {
+        self.diligent_device.clone()
+    }
+
+    /// Flushes prior immediate-context work and waits for a fence queued after
+    /// it. Callers must keep the context lock held through the subsequent map
+    /// so no command can be inserted between the fence and the map.
+    pub(crate) fn wait_for_gpu(&self) -> Result<(), String> {
+        let device = self
+            .diligent_device()
+            .ok_or_else(|| "Diligent device is unavailable".to_string())?;
+        let context = self
+            .diligent_context
+            .as_deref()
+            .ok_or_else(|| "Diligent context is unavailable".to_string())?;
+        wait_for_gpu(device, context)
     }
 
     /// The native `ID3D12Device` handle of the underlying D3D12 device
@@ -884,15 +924,17 @@ impl RenderDevice {
     pub fn create_buffer(&self, desc: &crate::render_resource::BufferDescriptor) -> Buffer {
         let value = self.create_diligent_buffer(desc, None);
         let id = crate::render_resource::BufferId::new();
-        if let Some(buffer) = &value {
-            diligent_registry::registry().register_buffer(id, buffer.as_raw());
-        }
+        let registration = value
+            .as_ref()
+            .and_then(|buffer| diligent_registry::registry().track_buffer(id, buffer.as_raw()));
         Buffer {
             id,
             value,
             size: desc.size,
             usage: desc.usage,
             context_handle: self.diligent_context_handle(),
+            device_handle: self.diligent_device_handle(),
+            _registry_registration: registration,
             mapped: default(),
             pending_readback: default(),
         }
@@ -911,15 +953,17 @@ impl RenderDevice {
         };
         let value = self.create_diligent_buffer(&buffer_desc, Some(desc.contents));
         let id = crate::render_resource::BufferId::new();
-        if let Some(buffer) = &value {
-            diligent_registry::registry().register_buffer(id, buffer.as_raw());
-        }
+        let registration = value
+            .as_ref()
+            .and_then(|buffer| diligent_registry::registry().track_buffer(id, buffer.as_raw()));
         Buffer {
             id,
             value,
             size: buffer_desc.size,
             usage: desc.usage,
             context_handle: self.diligent_context_handle(),
+            device_handle: self.diligent_device_handle(),
+            _registry_registration: registration,
             mapped: default(),
             pending_readback: default(),
         }
@@ -1003,9 +1047,9 @@ impl RenderDevice {
         };
         let value = self.create_diligent_texture(desc, initial_data);
         let id = crate::render_resource::TextureId::new();
-        if let Some(texture) = &value {
-            diligent_registry::registry().register_texture(id, texture.as_raw());
-        }
+        let registration = value
+            .as_ref()
+            .and_then(|texture| diligent_registry::registry().track_texture(id, texture.as_raw()));
         Texture {
             id,
             value,
@@ -1016,6 +1060,7 @@ impl RenderDevice {
             sample_count: desc.sample_count,
             usage: desc.usage,
             bind_flags: diligent_mapping::texture_usage_to_bind_flags(desc.usage),
+            _registry_registration: registration,
         }
     }
 
@@ -1025,9 +1070,9 @@ impl RenderDevice {
     pub fn create_texture(&self, desc: &crate::render_resource::TextureDescriptor) -> Texture {
         let value = self.create_diligent_texture(desc, None);
         let id = crate::render_resource::TextureId::new();
-        if let Some(texture) = &value {
-            diligent_registry::registry().register_texture(id, texture.as_raw());
-        }
+        let registration = value
+            .as_ref()
+            .and_then(|texture| diligent_registry::registry().track_texture(id, texture.as_raw()));
         Texture {
             id,
             value,
@@ -1038,6 +1083,7 @@ impl RenderDevice {
             sample_count: desc.sample_count,
             usage: desc.usage,
             bind_flags: diligent_mapping::texture_usage_to_bind_flags(desc.usage),
+            _registry_registration: registration,
         }
     }
 
@@ -1112,12 +1158,16 @@ impl RenderDevice {
     pub fn create_sampler(&self, desc: &crate::render_resource::SamplerDescriptor) -> Sampler {
         let value = self.create_diligent_sampler(desc);
         let id = crate::render_resource::SamplerId::new();
-        if let Some(sampler) = &value {
-            diligent_registry::registry().register_sampler(id, sampler.as_raw());
-        }
+        let registration = value
+            .as_ref()
+            .and_then(|sampler| diligent_registry::registry().track_sampler(id, sampler.as_raw()));
         Sampler {
             id,
-            inner: Arc::new(WgpuSampler { id, value }),
+            inner: Arc::new(WgpuSampler {
+                id,
+                value,
+                _registry_registration: registration,
+            }),
         }
     }
 
@@ -1194,8 +1244,12 @@ impl RenderDevice {
             crate::render_resource::MapMode::Read => sys::_MAP_TYPE::MAP_READ,
             crate::render_resource::MapMode::Write => sys::_MAP_TYPE::MAP_WRITE,
         } as sys::MAP_TYPE;
+        self.wait_for_gpu().map_err(|err| {
+            bevy_log::warn!("diligent: waiting before buffer map failed: {err}");
+            BufferAsyncError
+        })?;
         let mapped = context
-            .map_buffer(diligent, map_type, false)
+            .map_buffer(diligent, map_type, true)
             .map_err(|_| BufferAsyncError)?;
         let Some(mapped) = mapped else {
             return Err(BufferAsyncError);

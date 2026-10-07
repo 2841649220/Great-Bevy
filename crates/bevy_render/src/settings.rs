@@ -168,6 +168,10 @@ impl RenderResources {
     ) {
         let RenderResources(device, queue, adapter_info, render_adapter, instance) = self;
 
+        // Connect uploads before either world can run initialization systems.
+        // Replacing the handle also covers renderer recovery/device changes.
+        queue.attach(&device);
+
         let compressed_image_format_support =
             CompressedImageFormatSupport(CompressedImageFormats::from_features(device.features()));
 
@@ -234,6 +238,12 @@ impl RenderCreation {
                 let Some(backends) = render_creation.backends else {
                     return false;
                 };
+                if !backends.contains(Backends::DX12) {
+                    bevy_log::warn!(
+                        "diligent: renderer initialization requires the DX12 backend, but the configured backends are {backends:?}"
+                    );
+                    return false;
+                }
                 let settings = render_creation.clone();
 
                 // The diligent engine bootstrap is synchronous (no adapter
@@ -241,6 +251,20 @@ impl RenderCreation {
                 // the main/render world hand-off.
                 let render_resources =
                     renderer::initialize_renderer(backends, primary_window, &settings);
+
+                if render_resources.0.diligent_device().is_none() {
+                    bevy_log::warn!("diligent: renderer initialization produced no device");
+                    return false;
+                }
+                let required_features =
+                    settings.features & !settings.disabled_features.unwrap_or_default();
+                let missing_features = required_features & !render_resources.0.features();
+                if !missing_features.is_empty() {
+                    bevy_log::warn!(
+                        "diligent: requested features are not supported by the active compatibility path: {missing_features:?}"
+                    );
+                    return false;
+                }
 
                 *future_resources.lock().unwrap() = Some(render_resources);
             }

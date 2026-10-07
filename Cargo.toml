@@ -5166,6 +5166,28 @@ doc-scrape-examples = true
 [package.metadata.example.test_skinned_mesh_bounds]
 hidden = true
 
+# Great-Bevy: development runtime performance.
+#
+# Cargo's default dev profile compiles everything at `opt-level = 0`. For an
+# engine that is close to unusable: the ECS query iterators, the transform
+# propagation and the whole render backend all live in *dependencies* and stay
+# unoptimized, so a dev build of the engine runs an order of magnitude slower
+# than the same code in release.
+#
+# This is the configuration the Bevy book recommends:
+#   * the workspace's own crates are lightly optimized (`opt-level = 1`) so
+#     debug info and backtraces stay useful and incremental rebuilds stay cheap;
+#   * every dependency is fully optimized (`opt-level = 3`), which is where the
+#     hot paths actually are.
+#
+# Run `cargo build --profile release` (or `--release`) when measuring absolute
+# throughput; this profile only closes the gap between dev and release.
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 3
+
 [profile.wasm-release]
 inherits = "release"
 opt-level = "z"

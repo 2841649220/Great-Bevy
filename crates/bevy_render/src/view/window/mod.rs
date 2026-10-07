@@ -234,6 +234,16 @@ impl SurfaceData {
     }
 }
 
+impl Drop for SurfaceData {
+    fn drop(&mut self) {
+        // Remove the swap-chain-owned pointer before the swap chain fields
+        // release their native views, including during world shutdown.
+        let _guard = crate::renderer::diligent_registry::context_guard();
+        crate::renderer::diligent_registry::registry()
+            .clear_texture_view(self.swap_chain_texture_view.id());
+    }
+}
+
 #[derive(Resource, Default)]
 pub struct WindowSurfaces {
     surfaces: EntityHashMap<SurfaceData>,
@@ -318,6 +328,7 @@ pub fn prepare_windows(
         // resolves it like any other attachment. The wgpu-side consumers of
         // the swap-chain view (raw-encoder passes, screenshots) keep using
         // the dummy texture (TODO-REMOVE-M1-4).
+        let _guard = crate::renderer::diligent_registry::context_guard();
         let Some(rtv) = surface_data.swap_chain.current_back_buffer_rtv() else {
             // D3D12/Vulkan always have a back buffer; only the OpenGL
             // backend returns null here.
@@ -400,10 +411,16 @@ pub fn create_surfaces(
             data.configuration.width = window.physical_width;
             data.configuration.height = window.physical_height;
             data.configuration.present_mode = window.present_mode;
-            if let Err(err) = data
-                .swap_chain
-                .resize(window.physical_width, window.physical_height)
-            {
+            let _guard = crate::renderer::diligent_registry::context_guard();
+            crate::renderer::diligent_registry::registry()
+                .clear_texture_view(data.swap_chain_texture_view.id());
+            // SAFETY: the previous frame's tracked pass and borrowed RTV have
+            // ended; the context lock excludes any command using its old view.
+            let resize_result = unsafe {
+                data.swap_chain
+                    .resize(window.physical_width, window.physical_height)
+            };
+            if let Err(err) = resize_result {
                 warn!("diligent: swap chain resize failed: {err}");
             }
             // The cached framebuffers reference the old back-buffer views.
@@ -522,6 +539,9 @@ fn create_transition_texture_view(
                 height: configuration.height,
                 depth_or_array_layers: 1,
             },
+            _registry_registration: Some(
+                crate::renderer::diligent_registry::registry().reserve_texture_view(id),
+            ),
             dimension: wgpu_types::TextureViewDimension::D2,
         }),
     }

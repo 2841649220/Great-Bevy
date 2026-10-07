@@ -69,13 +69,17 @@ pub(crate) fn execute_texture_readback(
     {
         return Err(crate::render_resource::BufferAsyncError);
     }
+    pending.device.wait_for_gpu().map_err(|err| {
+        bevy_log::warn!("diligent: waiting before texture readback map failed: {err}");
+        crate::render_resource::BufferAsyncError
+    })?;
     let Ok(Some(mapped)) = context.map_texture_subresource(
         &staging,
         0,
         0,
         diligent_rs::diligent_sys::bindings::_MAP_TYPE::MAP_READ
             as diligent_rs::diligent_sys::bindings::MAP_TYPE,
-        false, // blocking: the copy must complete first
+        true, // the fence above completed the recorded copy
     ) else {
         return Err(crate::render_resource::BufferAsyncError);
     };

@@ -41,7 +41,7 @@ impl SwapChain {
     /// The current back-buffer render target view (borrowed - do not
     /// release). The pointer flips every `Present` call for D3D12, so fetch
     /// it fresh each frame.
-    pub fn current_back_buffer_rtv(&self) -> Option<NonOwning<sys::ITextureView>> {
+    pub fn current_back_buffer_rtv(&self) -> Option<NonOwning<'_, sys::ITextureView>> {
         let get = self
             .vtbl()
             .GetCurrentBackBufferRTV
@@ -52,7 +52,7 @@ impl SwapChain {
     }
 
     /// The swap chain's depth-stencil view (borrowed - do not release).
-    pub fn depth_dsv(&self) -> Option<NonOwning<sys::ITextureView>> {
+    pub fn depth_dsv(&self) -> Option<NonOwning<'_, sys::ITextureView>> {
         let get = self
             .vtbl()
             .GetDepthBufferDSV
@@ -72,11 +72,15 @@ impl SwapChain {
 
     /// Resizes the swap chain to the new window size (D3D12 requires a full
     /// resize path; the engine picks the optimal surface transform).
-    pub fn resize(&self, width: u32, height: u32) -> Result<()> {
+    ///
+    /// # Safety
+    ///
+    /// The caller must invalidate all borrowed back-buffer/depth views and
+    /// ensure no context command can still reference the old swap-chain
+    /// buffers. Diligent releases those views during resize.
+    pub unsafe fn resize(&self, width: u32, height: u32) -> Result<()> {
         if width == 0 || height == 0 {
-            return Err(Error::InvalidArgument(
-                "swap chain dimensions must be > 0",
-            ));
+            return Err(Error::InvalidArgument("swap chain dimensions must be > 0"));
         }
         let resize = self
             .vtbl()

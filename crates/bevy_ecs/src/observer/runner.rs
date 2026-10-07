@@ -194,7 +194,7 @@ mod tests {
 
         fn observer_system(_: On<TriggerEvent>, mut count: ResMut<TriggerCount>) {
             count.0 += 1;
-        };
+        }
 
         let mut world = World::default();
         world.init_resource::<TriggerCount>();

@@ -133,10 +133,7 @@ fn release_interface(ptr: *mut c_void) {
 /// concurrent access corrupts the D3D12 command list).
 fn context_methods(
     ctx: &diligent_rs::DeviceContext,
-) -> (
-    std::sync::MutexGuard<'static, ()>,
-    &sys::IDeviceContextMethods,
-) {
+) -> (diligent_registry::ContextGuard, &sys::IDeviceContextMethods) {
     let guard = diligent_registry::context_guard();
     // Safety: `ctx` is alive for the duration of the call.
     let methods = unsafe { &(*(*ctx.as_raw()).pVtbl).DeviceContext };
@@ -652,13 +649,13 @@ fn depth_ops<T>(
                 wgpu_types::LoadOp::Clear(_) => sys::_ATTACHMENT_LOAD_OP::ATTACHMENT_LOAD_OP_CLEAR,
                 wgpu_types::LoadOp::DontCare(_) => {
                     sys::_ATTACHMENT_LOAD_OP::ATTACHMENT_LOAD_OP_DISCARD
-                },
+                }
             } as sys::ATTACHMENT_LOAD_OP,
             match ops.store {
                 wgpu_types::StoreOp::Store => sys::_ATTACHMENT_STORE_OP::ATTACHMENT_STORE_OP_STORE,
                 wgpu_types::StoreOp::Discard => {
                     sys::_ATTACHMENT_STORE_OP::ATTACHMENT_STORE_OP_DISCARD
-                },
+                }
             } as sys::ATTACHMENT_STORE_OP,
         )),
         None => Ok((
@@ -814,6 +811,21 @@ fn framebuffer_size(framebuffer: *mut sys::IFramebuffer) -> Result<(u32, u32), S
     Ok((desc.Width, desc.Height))
 }
 
+/// Whether the MSAA resolve wiring is force-disabled via the
+/// DILIGENT_RS_NO_RESOLVE environment variable.
+///
+/// TEMP-BISECT-M2A2: the resolve wiring is the suspected cause of a TDR
+/// regression, so this escape hatch reproduces the pre-M2a-1 behaviour.
+///
+/// The value is cached after the first read. The plain std::env::var_os call
+/// used to sit directly inside begin_tracked_render_pass, which runs several
+/// times per frame - on Windows every call takes the process environment lock
+/// and allocates, which is pure overhead on the per-frame path.
+fn msaa_resolve_disabled() -> bool {
+    static DISABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *DISABLED.get_or_init(|| std::env::var_os("DILIGENT_RS_NO_RESOLVE").is_some())
+}
+
 /// Begins a Diligent render pass for a wgpu render-pass descriptor:
 /// resolves/derives the attachment views, creates (or reuses) the render
 /// pass + framebuffer and issues `BeginRenderPass` with the descriptor's
@@ -887,7 +899,7 @@ pub(crate) fn begin_tracked_render_pass(
         let sample_count = texture_sample_count(view)?;
         // TEMP-BISECT-M2A2: force the resolve off (M2a-1 behavior) to confirm
         // the resolve wiring is the TDR regression.
-        let resolve_disabled = std::env::var_os("DILIGENT_RS_NO_RESOLVE").is_some();
+        let resolve_disabled = msaa_resolve_disabled();
         let (resolve_ref, _resolve_present) = if let Some(resolve_target) =
             attachment.resolve_target
             && !resolve_disabled
@@ -1086,7 +1098,7 @@ pub(crate) fn begin_tracked_render_pass(
     // order (resolve attachments get a default DISCARD entry - the engine
     // indexes the array by attachment number).
     let mut clear_values: Vec<sys::OptimizedClearValue> = Vec::with_capacity(attachments.len());
-    let resolve_disabled = std::env::var_os("DILIGENT_RS_NO_RESOLVE").is_some();
+    let resolve_disabled = msaa_resolve_disabled();
     for attachment in descriptor.color_attachments.iter().flatten() {
         if attachment.resolve_target.is_some() && !resolve_disabled {
             clear_values.push(sys::OptimizedClearValue {

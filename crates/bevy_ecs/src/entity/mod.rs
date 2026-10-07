@@ -189,6 +189,13 @@ impl EntityIndex {
     /// # Panics
     ///
     /// This method will likely panic if given `u32` values that did not come from [`EntityIndex::to_bits`].
+    // Only the sparse-set boundary tests call the infallible form directly; the
+    // rest of the crate goes through `try_from_bits`, so this is dead code in a
+    // non-test build.
+    #[allow(
+        dead_code,
+        reason = "infallible counterpart to `try_from_bits`, exercised by the sparse-set boundary tests"
+    )]
     #[inline]
     const fn from_bits(bits: u32) -> Self {
         Self::try_from_bits(bits).expect("Attempted to initialize invalid bits as an entity index")

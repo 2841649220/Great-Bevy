@@ -84,17 +84,6 @@ pub fn render_system(
     #[cfg(feature = "trace")]
     let _span = info_span!("main_render_schedule").entered();
 
-    {
-        let render_device = world.resource::<RenderDevice>();
-        let render_queue = world.resource::<RenderQueue>();
-
-        // M1-4b-1: wire the Diligent immediate context into the queue BEFORE
-        // the render schedule runs, so the `write_buffer`/`write_texture`
-        // upload paths inside the schedule find the context wired (frame 1
-        // included).
-        render_queue.attach(render_device);
-    }
-
     world.run_schedule(RenderGraph);
 
     // M1-4b-1: the per-frame copies (screenshots, GPU readbacks) run on the
@@ -171,21 +160,21 @@ impl Default for RenderQueue {
 }
 
 impl RenderQueue {
-    /// Creates an empty queue (the context is wired by [`RenderQueue::attach`]).
+    /// Creates an empty queue. Renderer setup wires its context before the
+    /// queue is exposed to either world.
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// Wires the Diligent immediate context from the render device (once;
-    /// subsequent calls are no-ops). Called by `render_system` immediately
-    /// before `world.run_schedule(RenderGraph)` runs, so the
-    /// `write_buffer`/`write_texture` upload paths inside the schedule
-    /// (frame 1 included) find the context wired.
+    /// Wires the Diligent immediate context from the render device. This is
+    /// called while unpacking renderer resources, before render systems can
+    /// issue their first upload.
     pub(crate) fn attach(&self, render_device: &RenderDevice) {
-        let mut slot = self.diligent_context.lock().unwrap();
-        if slot.is_none() {
-            *slot = render_device.diligent_context_handle();
-        }
+        let mut slot = self
+            .diligent_context
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        *slot = render_device.diligent_context_handle();
     }
 
     /// Copies the bytes of `data` into `buffer` at `offset`.
@@ -194,7 +183,12 @@ impl RenderQueue {
     /// order on the immediate context). Same semantics as
     /// `wgpu Queue::write_buffer`.
     pub fn write_buffer(&self, buffer: &Buffer, offset: u64, data: &[u8]) {
-        let Some(context) = self.diligent_context.lock().unwrap().clone() else {
+        let Some(context) = self
+            .diligent_context
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+        else {
             bevy_log::debug!("diligent: write_buffer skipped (no diligent context)");
             return;
         };
@@ -226,7 +220,12 @@ impl RenderQueue {
             );
             return;
         }
-        let Some(context) = self.diligent_context.lock().unwrap().clone() else {
+        let Some(context) = self
+            .diligent_context
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+        else {
             bevy_log::debug!("diligent: write_texture skipped (no diligent context)");
             return;
         };
@@ -508,7 +507,7 @@ pub fn initialize_renderer(
                         )
                     }
                 }
-            },
+            }
             Err(err) => {
                 bevy_log::warn!("diligent: engine factory resolution failed ({err})");
                 (
@@ -519,15 +518,16 @@ pub fn initialize_renderer(
                     None,
                     None,
                 )
-            },
+            }
         };
 
-    // The capability-derived feature/limit set (M1-4a): the diligent
-    // feature mask is intersected with the `WgpuSettings` feature bits
-    // (requested/disabled features fold in below - drops bits, never adds).
+    // The capability-derived feature/limit set (M1-4a): report only features
+    // supported by the active Diligent compatibility path. Explicit feature
+    // requirements are checked by `RenderCreation::create_render` below the
+    // adapter initialization boundary; disabled features are removed here.
     let mut features = caps.as_ref().map_or(wgpu_types::Features::empty(), |caps| {
         caps.features().as_features()
-    }) | options.features;
+    });
     if let Some(disabled_features) = options.disabled_features {
         features.remove(disabled_features);
     }

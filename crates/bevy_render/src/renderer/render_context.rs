@@ -187,18 +187,23 @@ impl<'w, 's> RenderContext<'w, 's> {
         // The diligent begin must not hold a borrow of `self` beyond this
         // block, or the empty-pass fallback below cannot reborrow the state.
         let mut err_reason = None;
+        let mut pass_guard = None;
         let began_diligent = self
             .state
             .0
             .diligent_context
             .as_ref()
             .is_some_and(|context| {
+                let guard = crate::renderer::diligent_registry::context_guard();
                 match super::diligent_draw::begin_tracked_render_pass(
                     &self.render_device,
                     context,
                     &descriptor,
                 ) {
-                    Ok(()) => true,
+                    Ok(()) => {
+                        pass_guard = Some(guard);
+                        true
+                    }
                     Err(reason) => {
                         err_reason = Some(reason);
                         false
@@ -212,7 +217,11 @@ impl<'w, 's> RenderContext<'w, 's> {
                 .diligent_context
                 .as_ref()
                 .expect("checked above");
-            return TrackedRenderPass::diligent(&self.render_device, &**context);
+            return TrackedRenderPass::diligent_locked(
+                &self.render_device,
+                &**context,
+                pass_guard.expect("a successfully begun pass holds the context lock"),
+            );
         }
 
         // The pass could not begin on the diligent path: return an empty

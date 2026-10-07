@@ -75,7 +75,12 @@ impl DeviceContext {
 
     /// Binds vertex buffers starting at `start_slot`, with one byte offset
     /// per buffer. The context keeps strong references to the buffers.
-    pub fn set_vertex_buffers(&self, start_slot: u32, buffers: &[&Buffer], offsets: &[u64]) -> Result<()> {
+    pub fn set_vertex_buffers(
+        &self,
+        start_slot: u32,
+        buffers: &[&Buffer],
+        offsets: &[u64],
+    ) -> Result<()> {
         if buffers.len() != offsets.len() {
             return Err(Error::InvalidArgument(
                 "buffers and offsets must have the same length",
@@ -106,7 +111,7 @@ impl DeviceContext {
 
     /// Binds render targets; render target size for viewports is derived
     /// from the bound targets (0, 0).
-    pub fn set_render_targets(&self, rtvs: &[NonOwning<sys::ITextureView>]) {
+    pub fn set_render_targets(&self, rtvs: &[NonOwning<'_, sys::ITextureView>]) {
         let view_ptrs: Vec<*mut sys::ITextureView> = rtvs.iter().map(|v| v.as_ptr()).collect();
         let set = self
             .vtbl()
@@ -147,7 +152,7 @@ impl DeviceContext {
     }
 
     /// Clears the render target view to `color` (RGBA, 0..1).
-    pub fn clear_render_target(&self, rtv: &NonOwning<sys::ITextureView>, color: [f32; 4]) {
+    pub fn clear_render_target(&self, rtv: &NonOwning<'_, sys::ITextureView>, color: [f32; 4]) {
         let clear = self
             .vtbl()
             .ClearRenderTarget
@@ -228,9 +233,9 @@ impl DeviceContext {
     /// recorded in command order at the point of the call.
     pub fn update_buffer(&self, buffer: &Buffer, offset: u64, data: &[u8]) -> Result<()> {
         let size = buffer.size()?;
-        let end = offset.checked_add(data.len() as u64).ok_or_else(|| {
-            Error::InvalidArgument("buffer update range overflows u64")
-        })?;
+        let end = offset
+            .checked_add(data.len() as u64)
+            .ok_or_else(|| Error::InvalidArgument("buffer update range overflows u64"))?;
         if end > size {
             return Err(Error::Message(format!(
                 "buffer update range {offset}..{end} exceeds the buffer size {size}"
@@ -363,8 +368,9 @@ impl DeviceContext {
     ///
     /// Returns `Ok(None)` when `do_not_wait` is set and the GPU has not
     /// finished using the buffer yet (the cross-frame readback pattern:
-    /// retry on a later frame); with `do_not_wait` false the call blocks
-    /// until the data is available (the synchronous fallback).
+    /// retry on a later frame). Diligent's D3D12 backend does not guarantee
+    /// that `do_not_wait: false` waits for prior GPU work; callers must fence
+    /// that work before mapping if completion is required.
     ///
     /// The returned [`MappedBuffer`] unmaps the buffer on drop; the map
     /// region covers the whole buffer.
@@ -372,12 +378,12 @@ impl DeviceContext {
     /// The caller must keep `buffer` alive until the returned
     /// [`MappedBuffer`] is dropped (it holds the buffer's raw pointer; the
     /// unmap would otherwise hit a released object).
-    pub fn map_buffer(
-        &self,
-        buffer: &Buffer,
+    pub fn map_buffer<'a>(
+        &'a self,
+        buffer: &'a Buffer,
         map_type: sys::MAP_TYPE,
         do_not_wait: bool,
-    ) -> Result<Option<MappedBuffer<'_>>> {
+    ) -> Result<Option<MappedBuffer<'a>>> {
         let size = buffer.size()?;
         let map_flags = if do_not_wait {
             sys::_MAP_FLAGS::MAP_FLAG_DO_NOT_WAIT as sys::MAP_FLAGS
@@ -391,7 +397,13 @@ impl DeviceContext {
         let mut mapped: sys::PVoid = std::ptr::null_mut();
         // Safety: `buffer` is alive; `mapped` is an out param.
         unsafe {
-            map(self.as_raw(), buffer.as_raw(), map_type, map_flags, &mut mapped)
+            map(
+                self.as_raw(),
+                buffer.as_raw(),
+                map_type,
+                map_flags,
+                &mut mapped,
+            )
         };
         if mapped.is_null() {
             return Ok(None);
@@ -411,18 +423,19 @@ impl DeviceContext {
     /// subresource - the staging-texture readback pattern).
     ///
     /// Returns `Ok(None)` when `do_not_wait` is set and the GPU has not
-    /// finished using the subresource yet; with `do_not_wait` false the call
-    /// blocks until the data is available.
+    /// finished using the subresource yet. Diligent's D3D12 backend does not
+    /// guarantee that `do_not_wait: false` waits for prior GPU work; callers
+    /// must fence that work before mapping if completion is required.
     ///
     /// The returned [`MappedTexture`] unmaps the subresource on drop.
-    pub fn map_texture_subresource(
-        &self,
-        texture: &Texture,
+    pub fn map_texture_subresource<'a>(
+        &'a self,
+        texture: &'a Texture,
         mip_level: u32,
         array_slice: u32,
         map_type: sys::MAP_TYPE,
         do_not_wait: bool,
-    ) -> Result<Option<MappedTexture<'_>>> {
+    ) -> Result<Option<MappedTexture<'a>>> {
         let map_flags = if do_not_wait {
             sys::_MAP_FLAGS::MAP_FLAG_DO_NOT_WAIT as sys::MAP_FLAGS
         } else {
@@ -431,7 +444,9 @@ impl DeviceContext {
         let map = self
             .vtbl()
             .MapTextureSubresource
-            .ok_or(Error::MissingMethod("IDeviceContext::MapTextureSubresource"))?;
+            .ok_or(Error::MissingMethod(
+                "IDeviceContext::MapTextureSubresource",
+            ))?;
         let mut mapped: sys::MappedTextureSubresource = unsafe { std::mem::zeroed() };
         // Safety: `texture` is alive; `mapped` is an out param; the null map
         // region maps the entire subresource.
@@ -474,7 +489,7 @@ pub struct MappedBuffer<'a> {
     map_type: sys::MAP_TYPE,
     data: *mut u8,
     size: usize,
-    _marker: PhantomData<&'a DeviceContext>,
+    _marker: PhantomData<(&'a DeviceContext, &'a Buffer)>,
 }
 
 impl MappedBuffer<'_> {
@@ -527,7 +542,7 @@ pub struct MappedTexture<'a> {
     data: *mut u8,
     stride: usize,
     depth_stride: usize,
-    _marker: PhantomData<&'a DeviceContext>,
+    _marker: PhantomData<(&'a DeviceContext, &'a Texture)>,
 }
 
 impl MappedTexture<'_> {

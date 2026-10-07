@@ -33,6 +33,9 @@ define_atomic_id!(TextureId);
 #[derive(Clone)]
 pub struct Texture {
     pub(crate) id: TextureId,
+    /// Removes the non-owning registry pointer before the native handle releases.
+    pub(crate) _registry_registration:
+        Option<Arc<crate::renderer::diligent_registry::RegistryRegistration>>,
     /// The Diligent texture (`None` when the Diligent creation failed).
     pub(crate) value: Option<DiligentHandle<diligent_rs::Texture>>,
     /// The format of the texture.
@@ -72,9 +75,9 @@ impl Texture {
     pub fn create_view(&self, desc: &crate::render_resource::TextureViewDescriptor) -> TextureView {
         let value = self.diligent_view(desc);
         let id = TextureViewId::new();
-        if let Some(view) = &value {
-            crate::renderer::diligent_registry::registry().register_texture_view(id, view.as_raw());
-        }
+        let registration = value.as_ref().and_then(|view| {
+            crate::renderer::diligent_registry::registry().track_texture_view(id, view.as_raw())
+        });
         TextureView {
             id,
             inner: Arc::new(WgpuTextureView {
@@ -82,6 +85,7 @@ impl Texture {
                 value,
                 format: self.format,
                 size: self.size,
+                _registry_registration: registration,
                 dimension: desc
                     .dimension
                     .unwrap_or(wgpu_types::TextureViewDimension::D2),
@@ -107,7 +111,8 @@ impl Texture {
             sys::_TEXTURE_VIEW_TYPE::TEXTURE_VIEW_SHADER_RESOURCE
         } else if self.bind_flags & (sys::_BIND_FLAGS::BIND_UNORDERED_ACCESS as u32) != 0 {
             sys::_TEXTURE_VIEW_TYPE::TEXTURE_VIEW_UNORDERED_ACCESS
-        } else if !is_depth && self.bind_flags & (sys::_BIND_FLAGS::BIND_RENDER_TARGET as u32) != 0 {
+        } else if !is_depth && self.bind_flags & (sys::_BIND_FLAGS::BIND_RENDER_TARGET as u32) != 0
+        {
             sys::_TEXTURE_VIEW_TYPE::TEXTURE_VIEW_RENDER_TARGET
         } else if self.bind_flags & (sys::_BIND_FLAGS::BIND_DEPTH_STENCIL as u32) != 0 {
             sys::_TEXTURE_VIEW_TYPE::TEXTURE_VIEW_DEPTH_STENCIL

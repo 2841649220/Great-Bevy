@@ -145,17 +145,36 @@ impl<T> Deref for Handle<T> {
 /// on it is invalid. This wrapper exists so those pointers are still
 /// represented safely: no `Drop` impl, `Copy`/`Clone`, and a documented
 /// lifetime tied to the owning object.
-#[derive(Clone, Copy)]
-pub struct NonOwning<T> {
+/// The `'a` parameter is load-bearing, not documentation: it borrows the
+/// object that owns the view, which is what makes [`NonOwning::as_ref`] sound.
+/// Without it, every step of
+/// `let v = swap_chain.current_back_buffer_rtv().unwrap(); drop(swap_chain);
+/// let r = v.as_ref();` is safe code that yields a dangling reference.
+pub struct NonOwning<'a, T> {
     ptr: *mut T,
+    _owner: core::marker::PhantomData<&'a T>,
 }
 
-impl<T> NonOwning<T> {
+// Hand-written rather than derived: a derive would add a spurious
+// `T: Clone` / `T: Copy` bound even though the payload is always a raw pointer,
+// which needlessly restricts which interfaces can be viewed.
+impl<'a, T> Clone for NonOwning<'a, T> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<'a, T> Copy for NonOwning<'a, T> {}
+
+impl<'a, T> NonOwning<'a, T> {
     pub(crate) fn from_raw_opt(ptr: *mut T) -> Option<Self> {
         if ptr.is_null() {
             None
         } else {
-            Some(Self { ptr })
+            Some(Self {
+                ptr,
+                _owner: core::marker::PhantomData,
+            })
         }
     }
 
@@ -166,8 +185,9 @@ impl<T> NonOwning<T> {
 
     /// Reborrows the interface as a shared reference.
     pub fn as_ref(&self) -> &T {
-        // Safety: the owner keeps the object alive for the lifetime of this
-        // view; the pointer was non-null at creation.
+        // Safety: `'a` still borrows the owning object (the view cannot exist
+        // without it), so the object has not been dropped, and the pointer was
+        // non-null at creation.
         unsafe { &*self.ptr }
     }
 }

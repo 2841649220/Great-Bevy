@@ -249,7 +249,9 @@ impl ApplicationHandler for TriangleApp {
             }
             WindowEvent::Resized(size) => {
                 if let Some(state) = &mut self.state {
-                    if let Err(e) = state.swap_chain.resize(size.width, size.height) {
+                    // SAFETY: the frame is idle here and the example holds
+                    // no borrowed swap-chain views across the resize.
+                    if let Err(e) = unsafe { state.swap_chain.resize(size.width, size.height) } {
                         eprintln!("[demo] resize failed: {e}");
                     }
                     // The OS/DPI can resize the swap chain at any time; the

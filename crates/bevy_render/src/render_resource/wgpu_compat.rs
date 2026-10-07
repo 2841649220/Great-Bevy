@@ -202,6 +202,9 @@ impl core::fmt::Debug for WgpuBindGroup {
 pub struct WgpuTextureView {
     /// The registry id of the view (matches the wrapping `TextureView`'s id).
     pub(crate) id: crate::render_resource::TextureViewId,
+    /// Removes the non-owning pointer before the native view handle releases.
+    pub(crate) _registry_registration:
+        Option<Arc<crate::renderer::diligent_registry::RegistryRegistration>>,
     /// The Diligent texture view (`None` when the diligent creation failed).
     pub(crate) value: Option<DiligentHandle<diligent_rs::TextureView>>,
     /// The format of the underlying texture (drives derived attachment views).
@@ -233,6 +236,9 @@ impl core::fmt::Debug for WgpuTextureView {
 pub struct WgpuSampler {
     /// The registry id of the sampler (matches the wrapping `Sampler`'s id).
     pub(crate) id: crate::render_resource::SamplerId,
+    /// Removes the non-owning pointer before the native sampler handle releases.
+    pub(crate) _registry_registration:
+        Option<Arc<crate::renderer::diligent_registry::RegistryRegistration>>,
     /// The Diligent sampler (`None` when the diligent creation failed).
     pub(crate) value: Option<DiligentHandle<diligent_rs::Sampler>>,
 }
@@ -411,9 +417,8 @@ impl CommandEncoder {
         CommandBuffer { _private: () }
     }
 
-    /// Performs the blocking map + read of `pending.buffer` (the copy was
-    /// already recorded on the immediate context; the map blocks until the
-    /// GPU work finishes) and stores the bytes for `get_mapped_range`.
+    /// Fences the recorded work, maps `pending.buffer`, and stores the bytes
+    /// for `get_mapped_range`.
     fn run_pending_map(&self, pending: &PendingBufferMap) -> Result<(), BufferAsyncError> {
         let Some(context) = self.context() else {
             return Err(BufferAsyncError);
@@ -422,11 +427,15 @@ impl CommandEncoder {
             return Err(BufferAsyncError);
         };
         let _guard = crate::renderer::diligent_registry::context_guard();
+        self.render_device.wait_for_gpu().map_err(|err| {
+            bevy_log::warn!("diligent: waiting before buffer map failed: {err}");
+            BufferAsyncError
+        })?;
         let mapped = context
             .map_buffer(
                 buffer,
                 sys_map_type_read(),
-                false, // blocking: the recorded copy must complete first
+                true, // the fence above completed the recorded copy
             )
             .map_err(|_| BufferAsyncError)?;
         let Some(mapped) = mapped else {
@@ -443,14 +452,19 @@ impl CommandEncoder {
         desc: &RenderPassDescriptor<'_>,
     ) -> RenderPass<'encoder> {
         let context = self.context();
+        let mut pass_guard = None;
         let (context, began) = match context {
             Some(context) => {
+                let guard = crate::renderer::diligent_registry::context_guard();
                 match crate::renderer::diligent_draw::begin_tracked_render_pass(
                     &self.render_device,
                     context,
                     desc,
                 ) {
-                    Ok(()) => (Some(context), true),
+                    Ok(()) => {
+                        pass_guard = Some(guard);
+                        (Some(context), true)
+                    }
                     Err(err) => {
                         bevy_log::debug!(
                             "diligent: render pass '{:?}' could not begin: {err}",
@@ -464,6 +478,7 @@ impl CommandEncoder {
         };
         RenderPass {
             context,
+            _context_guard: pass_guard,
             began,
             poisoned: !began,
             index_format: None,
@@ -477,8 +492,11 @@ impl CommandEncoder {
         &'encoder mut self,
         _desc: &ComputePassDescriptor<'_>,
     ) -> ComputePass<'encoder> {
+        let context = self.context();
+        let pass_guard = context.map(|_| crate::renderer::diligent_registry::context_guard());
         ComputePass {
-            context: self.context(),
+            context,
+            _context_guard: pass_guard,
             poisoned: false,
             immediate: None,
             bind_groups: Vec::new(),
@@ -601,11 +619,55 @@ impl CommandEncoder {
     /// Clears the buffer to zero.
     pub fn clear_buffer(
         &mut self,
-        _buffer: &Buffer,
-        _offset: BufferAddress,
-        _size: Option<BufferAddress>,
+        buffer: &Buffer,
+        offset: BufferAddress,
+        size: Option<BufferAddress>,
     ) {
-        bevy_log::debug!("diligent: clear_buffer is not wired (TODO-REMOVE-M1-4)");
+        let Some(context) = self.context() else {
+            bevy_log::debug!("diligent: clear_buffer skipped (no diligent context)");
+            return;
+        };
+        let Some(diligent) = buffer.diligent() else {
+            bevy_log::debug!("diligent: clear_buffer skipped (buffer has no diligent side)");
+            return;
+        };
+        let buffer_size = buffer.size();
+        let Some(size) = size.or_else(|| buffer_size.checked_sub(offset)) else {
+            bevy_log::warn!(
+                "diligent: clear_buffer offset {offset} exceeds buffer size {buffer_size}"
+            );
+            return;
+        };
+        let Some(end) = offset.checked_add(size) else {
+            bevy_log::warn!("diligent: clear_buffer range overflows the buffer address space");
+            return;
+        };
+        if end > buffer_size || offset % 4 != 0 || size % 4 != 0 {
+            bevy_log::warn!(
+                "diligent: invalid clear_buffer range {offset}..{end} for buffer size {buffer_size}"
+            );
+            return;
+        }
+        if size == 0 {
+            return;
+        }
+
+        // UpdateBuffer is the portable immediate-context primitive available
+        // here. Chunking keeps CPU scratch memory bounded for large buffers.
+        const CHUNK_SIZE: usize = 64 * 1024;
+        let zeros = alloc::vec![0; CHUNK_SIZE];
+        let _guard = crate::renderer::diligent_registry::context_guard();
+        let mut write_offset = offset;
+        let mut remaining = size;
+        while remaining > 0 {
+            let chunk_size = remaining.min(CHUNK_SIZE as u64) as usize;
+            if let Err(err) = context.update_buffer(diligent, write_offset, &zeros[..chunk_size]) {
+                bevy_log::warn!("diligent: clear_buffer update failed: {err}");
+                return;
+            }
+            write_offset += chunk_size as u64;
+            remaining -= chunk_size as u64;
+        }
     }
 
     /// Records a timestamp write (no-op on the diligent path).
@@ -661,6 +723,7 @@ fn sys_map_type_read() -> diligent_rs::diligent_sys::bindings::MAP_TYPE {
 /// A render pass recording directly on the diligent immediate context.
 pub struct RenderPass<'encoder> {
     context: Option<&'encoder diligent_rs::DeviceContext>,
+    _context_guard: Option<crate::renderer::diligent_registry::ContextGuard>,
     began: bool,
     poisoned: bool,
     /// The index format of the bound index buffer (per-draw in
@@ -1201,6 +1264,7 @@ impl Drop for RenderPass<'_> {
 /// A compute pass recording directly on the diligent immediate context.
 pub struct ComputePass<'encoder> {
     context: Option<&'encoder diligent_rs::DeviceContext>,
+    _context_guard: Option<crate::renderer::diligent_registry::ContextGuard>,
     poisoned: bool,
     /// The current pipeline's immediate-constants binding (M2a,
     /// `set_immediates` -> `SetInlineConstants` on the immediate SRB).

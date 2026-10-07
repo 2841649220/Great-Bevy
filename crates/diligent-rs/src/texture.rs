@@ -74,7 +74,7 @@ impl Texture {
     /// as [`NonOwning`]. Returns `Err(NullPointer)` when the engine has no
     /// default view of that type (a view type can be absent when the
     /// texture's bind flags do not enable it).
-    pub fn get_default_view(&self, view_type: sys::TEXTURE_VIEW_TYPE) -> Result<NonOwning<sys::ITextureView>> {
+    pub fn get_default_view(&self, view_type: sys::TEXTURE_VIEW_TYPE) -> Result<NonOwning<'_, sys::ITextureView>> {
         let get = unsafe {
             (*(*self.as_raw()).pVtbl)
                 .Texture

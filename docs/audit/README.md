@@ -10,8 +10,10 @@
 | 维度 | 状态 | 证据 |
 |---|---|---|
 | 工作区编译 | ✅ 通过 | `cargo check -j 4 --workspace --all-targets` → exit 0，0 error |
-| 核心 crate 测试 | ✅ 通过 | `cargo test --no-fail-fast -p bevy_ecs -p bevy_tasks -p bevy_time -p bevy_transform -p bevy_platform -p bevy_window` → 6 个二进制，**597 passed / 0 failed** |
-| 格式与换行 | ✅ 归零 | 全部包 `cargo fmt --check` 通过；`git ls-files --eol` 无 CRLF/混合换行；制表符 0 |
+| 编译告警 | ✅ 归零 | 全工作区 **0 条真实告警**（仅剩 `build.rs` 信息性 `cargo:warning`） |
+| 核心 crate 测试 | ✅ 通过 | `cargo test --no-fail-fast -p bevy_ecs -p bevy_tasks -p bevy_transform` → 11 个目标，**1410 passed / 0 failed / 5 ignored** |
+| 开发态运行效率 | ✅ 已修复 | `Cargo.toml` 补 `[profile.dev]` / `[profile.dev.package."*"]`；构建日志由 `[unoptimized + debuginfo]` 变为 `[optimized + debuginfo]` |
+| 格式与换行 | ⚠️ 本轮改动全洁，存量 5 文件未洁 | 本轮改动的全部文件 `cargo fmt --check` 通过；`git ls-files --eol` 全仓 `w/lf`（含本轮新写入文件），无换行churn。存量 5 个**本轮未触碰**的文件不洁，见 §4.7 |
 | 注释语言 | ✅ 统一英文 | `crates/` 内仅剩上游日文按键名与 `bevy_reflect` Unicode 测试标识符 |
 | Clippy 告警 | ⚠️ 未清零 | 272 条（`bevy_render` 的 Diligent 迁移代码为主），清单见第 4 节 |
 | 全量测试 | ⚠️ 未跑全 | 示例二进制链接 Diligent 静态库受本机 16 GB 内存限制 |
@@ -26,7 +28,8 @@
 | M2 | 子系统逻辑、计时与层级加固 | `bevy_time` / `bevy_transform` / `bevy_reflect` / `bevy_platform` | 完成 |
 | M3 | 渲染子系统 unsafe 审计与编译阻塞修复 | `bevy_render` + examples | 完成 |
 | M4 | 代码质量、lint 与格式化统一 | 全仓 | 完成（clippy 告警见 §4） |
-| M5 | 全工作区验证 | 全仓 | 进行中（见 §3） |
+| M5 | 全工作区验证 | 全仓 | 完成 |
+| M6 | 逐模块审查、告警归零与开发态运行效率治理 | fork 自有代码 + 构建配置 | 完成（见 §3.4、§4） |
 
 ---
 
@@ -45,6 +48,8 @@
 | 观察者触发 ID 回绕跳过新观察者 | `bevy_ecs::observer` | 「0 保留为哨兵」下沉到 `increment_trigger_id`（`u32::MAX → 1`），派发热路径不再含 `unsafe` |
 | 反射远端类型 transmute 布局 | `bevy_reflect::type_registry` | 注册期校验 `size/align`，文档化 `repr(transparent)` 不变量 |
 | Diligent 空指针解引用 / `mem::zeroed` 未校验 | `bevy_render::renderer::diligent_*` | 全部补 null 检查与 `SAFETY` 说明；偏移断言改为编译期常量断言 |
+| `NonOwning<T>` 缺生命周期 → 安全代码可触发 UB | `diligent-rs::handle` | 补 `'a` + `PhantomData<&'a T>`，手工实现 `Clone`/`Copy`（原 `derive` 强加多余 `T: Copy`）；同步 `context.rs`/`swapchain.rs`/`texture.rs` 签名。此前文档声称“tied to the owning object”，但 `as_ref()` 是安全 fn 且类型无生命周期约束 |
+| 锁中毒使渲染器永久失效 | `bevy_render::renderer::diligent_registry` | registry 4 把锁与 `CONTEXT_LOCK` 改为 poison-tolerant（`unwrap_or_else(PoisonError::into_inner)`）。diligent-rs 有 145 处 `expect()`，一次 panic 毒化即导致后续每帧 panic |
 
 ### 3.2 逻辑缺陷
 
@@ -66,6 +71,20 @@
 | 格式不合规包 | `bevy_anti_alias` / `bevy_solari` / `bevy_vendor_plugins` 经 `cargo fmt` 修正 |
 | CRLF / 混合换行 / 制表符 / 末行换行 | 全仓归零 |
 | 无谓的 API 面扩大 | `EntityIndex::from_bits` 由 `pub` 收回 crate 私有 |
+| 上一轮重构残留的孤儿 lint 属性 | `bevy_transform::systems` 中 `#[expect(unsafe_code)]` 仍挂在已无 unsafe 代码的 `if` 上（递归改显式工作栈后遗留）→ 触发 `unfulfilled_lint_expectations`，已移除 |
+| 嵌套 `fn` 后多余分号 / 冗余路径限定 / 未使用 glob 导入 | `bevy_ecs::observer::runner`、`bevy_tasks::task_pool`、`bevy_transform::systems` 各 1 处，已修正 |
+| bindgen 重声明 C 运行时符号告警 ×5 | `diligent-sys`：`suspicious_runtime_symbol_definitions`（**非** `clashing_extern_declarations`），Windows x64 下 `-> u64` 与 `-> usize` ABI 等价，模块级 `#[allow]` |
+
+---
+
+### 3.4 开发态运行效率（M6）
+
+| 主题 | 位置 | 修复 |
+|---|---|---|
+| **dev 全链路 `opt-level = 0`** | `Cargo.toml` | 新增 `[profile.dev] opt-level = 1` 与 `[profile.dev.package."*"] opt-level = 3`。此前 dev 构建下 ECS 查询迭代器、变换传播与整个渲染后端（均在依赖中）全部未优化，引擎实测比 release 慢一个数量级——这是“运行不高效”的根因 |
+| 未启用仓库自带的快速构建配置 | `.cargo/config.toml`（新建，gitignored） | 启用 `config_fast_builds.toml` 的 Windows LLD 链接器；已用 `rustc -C linker=rust-lld.exe` 冒烟验证 |
+| 逐帧读环境变量 | `bevy_render::renderer::diligent_draw` | `std::env::var_os("DILIGENT_RS_NO_RESOLVE")` 原在 `begin_tracked_render_pass`（每帧多次）内共 2 处 → 提为 `OnceLock` 缓存（Windows 下 `var_os` 每次取进程环境锁并分配） |
+| registry 读路径被 `Mutex` 串行化 | `bevy_render::renderer::diligent_registry` | 4 个 `Mutex<HashMap>` → `RwLock<HashMap>`：`resolve_*` 位于逐 draw 热路径（`set_vertex_buffer`/`set_index_buffer`/间接绘制），读远多于写 |
 
 ---
 
@@ -75,7 +94,14 @@
    - `doc_markdown` 100 条（文档反引号）、`std_instead_of_core` 35 条（`core::io` 未稳定，**有意保留**）、
    - `arc_with_non_send_sync` 24 条、`result_large_err` 12 条、`is_multiple_of` 6 条，以及示例/工具类零散告警。
 2. **`cargo test --workspace` 未跑全**：示例二进制链接 ~70 MB Diligent 静态库（LTCG）受本机内存/磁盘限制；库与核心测试目标全部通过。
-3. **未引用的资源**：`assets/models/aimisi/*.glb`（4 个文件 / 158 MB）在全仓无任何引用，未纳入版本控制，待确认后删除。
+3. **`ResourceRegistry` 无移除路径（慢速内存增长 + 悬垂存量）**：`bevy_render::renderer::diligent_registry` 是进程级 `OnceLock`，只有 `register_*`/`resolve_*`，没有注销。
+   而 `define_atomic_id!` 用 `fetch_add` 单调发号、**id 永不复用**，因此模块文档中“re-registration overwrites stale entries / 只有 id 复用才会命中陈旧项”的论证与事实不符。
+   后果：① 条目随累计创建无限增长（存活期与进程同长）；② 已析构资源的裸指针永久留存。因 id 不复用，当前**不构成 UAF**，属慢速泄漏。
+   建议修复（未做，需先建验证路径）：存储侧改存 `Weak`，`resolve_*` 时 `upgrade()` —— 既能在失败时惰性剔除陈旧项，又能让 resolve 返回强引用从而彻底消除悬垂隐患。
+4. **`Cargo.lock` 未纳入版本控制**：`.gitignore` 忽略 `Cargo.lock`（继承自上游“库”定位），但本仓库交付引擎与示例，构建不可复现、依赖会漂移。建议 `git add -f Cargo.lock` 并移除该忽略规则（属仓库策略变更，待确认）。
+5. **LLD 链接 Diligent 静态库未验证**：`third_party/diligent-build` 中的 `DiligentCore.lib`（565 MB）以 MSVC LTCG（`/GL`）构建，LLD 对 LTCG 目标文件支持有限。本轮只验证了不链接 Diligent 的目标（`cargo check` 全工作区、三者核心 crate 测试全部通过并成功链接）。若链接 Diligent 的目标失败，删除 `.cargo/config.toml` 即可回退（代价是链接变慢，不影响正确性）。
+7. **存量 `cargo fmt --check` 不洁（5 文件，本轮未触碰）**：`bevy_render::render_resource::bind_group`、`bevy_render::render_resource::texture`、`bevy_render::renderer::diligent_draw:652`、`diligent-rs/build.rs`、`diligent-rs/examples/triangle.rs`、`diligent-sys/build.rs`。这些文件本轮均未修改，diff 形态（match 臂尾逗号、链式调用换行、fn 签名单行化）符合 rustfmt 版本漂移特征（`rustfmt.toml` 固定 `style_edition = "2021"`，当前 rustfmt 为 1.9.0-stable / 工具链 1.98.1）。**未执行 `cargo fmt`**：会引入与本轮无关的大面积 diff，且可能与 CI 期望的 rustfmt 版本冲突，需先确认应当以哪个 rustfmt 版本为准。据此，§1 中“全部包 fmt 通过”的原结论应修正为上述表述。
+8. **`CONTEXT_LOCK` 全局串行化**：`diligent_registry::context_guard()` 为每一次 Diligent 立即上下文调用加全局 `Mutex`。diligent-rs 明确记录立即上下文**非线程安全**（引擎录制到单条 D3D12 命令列表），故当前串行化是**正确性所需**；但渲染世界调度是多线程的，这是渲染录制的结构性瓶颈。彻底消除需让渲染图在单线程上录制，属架构级改动，未做。
 
 ---
 
